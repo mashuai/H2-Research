@@ -13,7 +13,6 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.util.ArrayList;
 import java.util.Random;
-
 import org.h2.store.fs.FileBase;
 import org.h2.store.fs.FilePath;
 import org.h2.store.fs.FilePathWrapper;
@@ -25,6 +24,9 @@ import org.h2.util.IOUtils;
  */
 public class FilePathReorderWrites extends FilePathWrapper {
 
+    /**
+     * Whether trace output of all method calls is enabled.
+     */
     static final boolean TRACE = false;
 
     private static final FilePathReorderWrites INSTANCE = new FilePathReorderWrites();
@@ -48,8 +50,8 @@ public class FilePathReorderWrites extends FilePathWrapper {
     }
 
     /**
-     * Set the number of write operations before a simulated power failure, and the
-     * random seed (for partial writes).
+     * Set the number of write operations before a simulated power failure, and
+     * the random seed (for partial writes).
      *
      * @param count the number of write operations (0 to never fail,
      *            Integer.MAX_VALUE to count the operations)
@@ -67,13 +69,13 @@ public class FilePathReorderWrites extends FilePathWrapper {
     /**
      * Whether partial writes are possible (writing only part of the data).
      *
-     * @param partialWrites true to enable
+     * @param b true to enable
      */
-    public void setPartialWrites(boolean partialWrites) {
-        FilePathReorderWrites.partialWrites = partialWrites;
+    public static void setPartialWrites(boolean b) {
+        partialWrites = b;
     }
 
-    boolean getPartialWrites() {
+    static boolean isPartialWrites() {
         return partialWrites;
     }
 
@@ -105,10 +107,11 @@ public class FilePathReorderWrites extends FilePathWrapper {
         if (powerFailureCountdown == 0) {
             return;
         }
-        if (--powerFailureCountdown > 0) {
-            return;
+        if (powerFailureCountdown < 0) {
+            throw POWER_FAILURE;
         }
-        if (powerFailureCountdown >= -1) {
+        powerFailureCountdown--;
+        if (powerFailureCountdown == 0) {
             powerFailureCountdown--;
             throw POWER_FAILURE;
         }
@@ -120,9 +123,11 @@ public class FilePathReorderWrites extends FilePathWrapper {
         FilePath copy = FilePath.get(getBase().toString() + ".copy");
         OutputStream out = copy.newOutputStream(false);
         IOUtils.copy(in, out);
+        in.close();
+        out.close();
         FileChannel base = getBase().open(mode);
         FileChannel readBase = copy.open(mode);
-        return new FilePowerFailure(this, base, readBase);
+        return new FileReorderWrites(this, base, readBase);
     }
 
     @Override
@@ -135,12 +140,17 @@ public class FilePathReorderWrites extends FilePathWrapper {
         return 45000;
     }
 
+    @Override
+    public void delete() {
+        super.delete();
+        FilePath.get(getBase().toString() + ".copy").delete();
+    }
 }
 
 /**
- * An file that checks for errors before each write operation.
+ * A write-reordering file implementation.
  */
-class FilePowerFailure extends FileBase {
+class FileReorderWrites extends FileBase {
 
     private final FilePathReorderWrites file;
     /**
@@ -149,7 +159,8 @@ class FilePowerFailure extends FileBase {
     private final FileChannel base;
 
     /**
-     * The base channel that is used for reading, where all operations are immediately applied to get a consistent view before a power failure.
+     * The base channel that is used for reading, where all operations are
+     * immediately applied to get a consistent view before a power failure.
      */
     private final FileChannel readBase;
 
@@ -158,11 +169,11 @@ class FilePowerFailure extends FileBase {
     /**
      * The list of not yet applied to the base channel. It is sorted by time.
      */
-    private ArrayList<FileOperation> notAppliedList = new ArrayList<FileOperation>();
+    private ArrayList<FileWriteOperation> notAppliedList = new ArrayList<FileWriteOperation>();
 
     private int id;
 
-    FilePowerFailure(FilePathReorderWrites file, FileChannel base, FileChannel readBase) {
+    FileReorderWrites(FilePathReorderWrites file, FileChannel base, FileChannel readBase) {
         this.file = file;
         this.base = base;
         this.readBase = readBase;
@@ -207,20 +218,20 @@ class FilePowerFailure extends FileBase {
         if (oldSize <= newSize) {
             return this;
         }
-        addOperation(new FileOperation(id++, newSize, null));
+        addOperation(new FileWriteOperation(id++, newSize, null));
         return this;
     }
 
-    private int addOperation(FileOperation op) throws IOException {
+    private int addOperation(FileWriteOperation op) throws IOException {
         trace("op " + op);
         checkError();
         notAppliedList.add(op);
-        long now = op.time;
+        long now = op.getTime();
         for (int i = 0; i < notAppliedList.size() - 1; i++) {
-            FileOperation old = notAppliedList.get(i);
+            FileWriteOperation old = notAppliedList.get(i);
             boolean applyOld = false;
             // String reason = "";
-            if (old.time + 45000 < now) {
+            if (old.getTime() + 45000 < now) {
                 // reason = "old";
                 applyOld = true;
             } else if (old.overlaps(op)) {
@@ -237,12 +248,12 @@ class FilePowerFailure extends FileBase {
                 i--;
             }
         }
-         return op.apply(readBase);
+        return op.apply(readBase);
     }
 
     private void applyAll() throws IOException {
         trace("applyAll");
-        for (FileOperation op : notAppliedList) {
+        for (FileWriteOperation op : notAppliedList) {
             op.apply(base);
         }
         notAppliedList.clear();
@@ -257,12 +268,25 @@ class FilePowerFailure extends FileBase {
 
     @Override
     public int write(ByteBuffer src) throws IOException {
-        return addOperation(new FileOperation(id++, readBase.position(), src));
+        return write(src, readBase.position());
     }
 
     @Override
     public int write(ByteBuffer src, long position) throws IOException {
-        return addOperation(new FileOperation(id++, position, src));
+        if (FilePathReorderWrites.isPartialWrites() && src.remaining() > 2) {
+            ByteBuffer buf1 = src.slice();
+            ByteBuffer buf2 = src.slice();
+            int len1 = src.remaining() / 2;
+            int len2 = src.remaining() - len1;
+            buf1.limit(buf1.limit() - len2);
+            buf2.position(buf2.position() + len1);
+            int x = addOperation(new FileWriteOperation(id++, position, buf1));
+            x += addOperation(
+                    new FileWriteOperation(id++, position + len1, buf2));
+            src.position( src.position() + x );
+            return x;
+        }
+        return addOperation(new FileWriteOperation(id++, position, src));
     }
 
     private void checkError() throws IOException {
@@ -293,13 +317,13 @@ class FilePowerFailure extends FileBase {
      * A file operation (that might be re-ordered with other operations, or not
      * be applied on power failure).
      */
-    static class FileOperation {
-        final int id;
-        final long time;
-        final ByteBuffer buffer;
-        final long position;
+    static class FileWriteOperation {
+        private final int id;
+        private final long time;
+        private final ByteBuffer buffer;
+        private final long position;
 
-        FileOperation(int id, long position, ByteBuffer src) {
+        FileWriteOperation(int id, long position, ByteBuffer src) {
             this.id = id;
             this.time = System.currentTimeMillis();
             if (src == null) {
@@ -313,7 +337,18 @@ class FilePowerFailure extends FileBase {
             this.position = position;
         }
 
-        public boolean overlaps(FileOperation other) {
+        public long getTime() {
+            return time;
+        }
+
+        /**
+         * Check whether the file region of this operation overlaps with
+         * another operation.
+         *
+         * @param other the other operation
+         * @return if there is an overlap
+         */
+        boolean overlaps(FileWriteOperation other) {
             if (isTruncate() && other.isTruncate()) {
                 // we just keep the latest truncate operation
                 return true;
@@ -339,12 +374,17 @@ class FilePowerFailure extends FileBase {
             return buffer == null ? 0 : buffer.limit() - buffer.position();
         }
 
+        /**
+         * Apply the operation to the channel.
+         *
+         * @param channel the channel
+         * @return the return value of the operation
+         */
         int apply(FileChannel channel) throws IOException {
             if (isTruncate()) {
                 channel.truncate(position);
                 return -1;
             }
-            // TODO support the case were part is not written
             int len = channel.write(buffer, position);
             buffer.flip();
             return len;

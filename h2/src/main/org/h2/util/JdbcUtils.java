@@ -19,10 +19,9 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Properties;
-
 import javax.naming.Context;
 import javax.sql.DataSource;
-
+import org.h2.api.CustomDataTypesHandler;
 import org.h2.api.ErrorCode;
 import org.h2.api.JavaObjectSerializer;
 import org.h2.engine.SysProperties;
@@ -40,12 +39,17 @@ public class JdbcUtils {
      */
     public static JavaObjectSerializer serializer;
 
+    /**
+     * Custom data types handler to use.
+     */
+    public static CustomDataTypesHandler customDataTypesHandler;
+
     private static final String[] DRIVERS = {
         "h2:", "org.h2.Driver",
         "Cache:", "com.intersys.jdbc.CacheDriver",
         "daffodilDB://", "in.co.daffodil.db.rmi.RmiDaffodilDBDriver",
         "daffodil", "in.co.daffodil.db.jdbc.DaffodilDBDriver",
-        "db2:", "COM.ibm.db2.jdbc.net.DB2Driver",
+        "db2:", "com.ibm.db2.jcc.DB2Driver",
         "derby:net:", "org.apache.derby.jdbc.ClientDriver",
         "derby://", "org.apache.derby.jdbc.ClientDriver",
         "derby:", "org.apache.derby.jdbc.EmbeddedDriver",
@@ -119,6 +123,16 @@ public class JdbcUtils {
                 throw DbException.convert(e);
             }
         }
+
+        String customTypeHandlerClass = SysProperties.CUSTOM_DATA_TYPES_HANDLER;
+        if (customTypeHandlerClass != null) {
+            try {
+                customDataTypesHandler = (CustomDataTypesHandler)
+                        loadUserClass(customTypeHandlerClass).newInstance();
+            } catch (Exception e) {
+                throw DbException.convert(e);
+            }
+        }
     }
 
     /**
@@ -129,7 +143,8 @@ public class JdbcUtils {
      * @param className the name of the class
      * @return the class object
      */
-    public static Class<?> loadUserClass(String className) {
+    @SuppressWarnings("unchecked")
+    public static <Z> Class<Z> loadUserClass(String className) {
         if (allowedClassNames == null) {
             // initialize the static fields
             String s = SysProperties.ALLOWED_CLASSES;
@@ -168,7 +183,7 @@ public class JdbcUtils {
                 try {
                     Class<?> userClass = classFactory.loadClass(className);
                     if (!(userClass == null)) {
-                        return userClass;
+                        return (Class<Z>) userClass;
                     }
                 } catch (Exception e) {
                     throw DbException.get(
@@ -178,10 +193,10 @@ public class JdbcUtils {
         }
         // Use local ClassLoader
         try {
-            return Class.forName(className);
+            return (Class<Z>) Class.forName(className);
         } catch (ClassNotFoundException e) {
             try {
-                return Class.forName(
+                return (Class<Z>) Class.forName(
                         className, true,
                         Thread.currentThread().getContextClassLoader());
             } catch (Exception e2) {

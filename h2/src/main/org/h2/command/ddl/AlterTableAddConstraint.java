@@ -7,7 +7,6 @@ package org.h2.command.ddl;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-
 import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.constraint.Constraint;
@@ -33,7 +32,8 @@ import org.h2.util.New;
  * This class represents the statement
  * ALTER TABLE ADD CONSTRAINT
  */
-//AlterTableAlterColumn只有执行alter命令时会产生此类的实例，而AlterTableAddConstraint实例在alter和create table命令中都会产生
+//AlterTableAlterColumn只有执行alter命令时会产生此类的实例，
+//而AlterTableAddConstraint实例在alter和create table命令中都会产生
 public class AlterTableAddConstraint extends SchemaCommand {
 
     private int type;
@@ -50,6 +50,7 @@ public class AlterTableAddConstraint extends SchemaCommand {
     private String comment;
     private boolean checkExisting;
     private boolean primaryKeyHash;
+    private boolean ifTableExists;
     private final boolean ifNotExists;
     private ArrayList<Index> createdIndexes = New.arrayList();
 
@@ -57,6 +58,10 @@ public class AlterTableAddConstraint extends SchemaCommand {
             boolean ifNotExists) {
         super(session, schema);
         this.ifNotExists = ifNotExists;
+    }
+
+    public void setIfTableExists(boolean b) {
+        ifTableExists = b;
     }
 
     private String generateConstraintName(Table table) {
@@ -91,7 +96,13 @@ public class AlterTableAddConstraint extends SchemaCommand {
             session.commit(true); //如果是非事务的，那么就得自动提交
         }
         Database db = session.getDatabase();
-        Table table = getSchema().getTableOrView(session, tableName);
+        Table table = getSchema().findTableOrView(session, tableName);
+        if (table == null) {
+            if (ifTableExists) {
+                return 0;
+            }
+            throw DbException.get(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, tableName);
+        }
         if (getSchema().findConstraint(session, constraintName) != null) {
             if (ifNotExists) {
                 return 0;
@@ -185,7 +196,7 @@ public class AlterTableAddConstraint extends SchemaCommand {
             int id = getObjectId();
             String name = generateConstraintName(table);
             ConstraintCheck check = new ConstraintCheck(getSchema(), id, name, table);
-            TableFilter filter = new TableFilter(session, table, null, false, null);
+            TableFilter filter = new TableFilter(session, table, null, false, null, 0, null);
             checkExpression.mapColumns(filter, 0);
             checkExpression = checkExpression.optimize(session);
             check.setExpression(checkExpression);
@@ -197,7 +208,10 @@ public class AlterTableAddConstraint extends SchemaCommand {
             break;
         }
         case CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_REFERENTIAL: {
-            Table refTable = refSchema.getTableOrView(session, refTableName);
+            Table refTable = refSchema.resolveTableOrView(session, refTableName);
+            if (refTable == null) {
+                throw DbException.get(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, refTableName);
+            }
             session.getUser().checkRight(refTable, Right.ALL);
             if (!refTable.canReference()) {
                 throw DbException.getUnsupportedException("Reference " +
@@ -210,18 +224,6 @@ public class AlterTableAddConstraint extends SchemaCommand {
             if (index != null && canUseIndex(index, table, indexColumns, false)) {
                 isOwner = true;
                 index.getIndexType().setBelongsToConstraint(true);
-//<<<<<<< HEAD:src/main/org/h2/command/ddl/AlterTableAddConstraint.java
-//            } else { //isOwner同ALTER_TABLE_ADD_CONSTRAINT_UNIQUE中的解释
-//                if (db.isStarting()) {
-//                    // before version 1.3.176, an existing index was used:
-//                    // must do the same to avoid
-//                    // Unique index or primary key violation:
-//                    // "PRIMARY KEY ON """".PAGE_INDEX"
-//                    index = getIndex(table, indexColumns, true);
-//                } else {
-//                    index = getIndex(table, indexColumns, false);
-//                }
-//=======
             } else {
                 index = getIndex(table, indexColumns, true);
                 if (index == null) {
@@ -239,6 +241,7 @@ public class AlterTableAddConstraint extends SchemaCommand {
                 throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
             }
             boolean isRefOwner = false;
+            //refIndex.getTable() == refTable是多于的，canUseIndex已经判断了
             if (refIndex != null && refIndex.getTable() == refTable &&
                     canUseIndex(refIndex, refTable, refIndexColumns, false)) {
                 isRefOwner = true;
@@ -318,6 +321,9 @@ public class AlterTableAddConstraint extends SchemaCommand {
     }
 
     private static Index getUniqueIndex(Table t, IndexColumn[] cols) {
+        if (t.getIndexes() == null) {
+            return null;
+        }
         for (Index idx : t.getIndexes()) {
             if (canUseUniqueIndex(idx, t, cols)) {
                 return idx;
@@ -327,6 +333,9 @@ public class AlterTableAddConstraint extends SchemaCommand {
     }
 
     private static Index getIndex(Table t, IndexColumn[] cols, boolean moreColumnOk) {
+        if (t.getIndexes() == null) {
+            return null;
+        }
         for (Index idx : t.getIndexes()) {
             if (canUseIndex(idx, t, cols, moreColumnOk)) {
                 return idx;

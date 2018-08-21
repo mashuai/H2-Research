@@ -11,7 +11,7 @@ import org.h2.engine.Database;
 import org.h2.engine.Session;
 import org.h2.index.IndexCondition;
 import org.h2.message.DbException;
-import org.h2.result.LocalResult;
+import org.h2.result.ResultInterface;
 import org.h2.table.ColumnResolver;
 import org.h2.table.TableFilter;
 import org.h2.util.StringUtils;
@@ -43,52 +43,50 @@ public class ConditionInSelect extends Condition {
     @Override
     public Value getValue(Session session) {
         query.setSession(session);
-        query.setDistinct(true);
-        LocalResult rows = query.query(0);
-
-        try {
-            //子查询没有记录时，如果是ALL类型的子查询，那么认为条件为true，
-            //否则为false，
-            //假设表中字段id的值是1到6，这条语句
-            //delete from ConditionInSelectTest where id > ALL(select id from ConditionInSelectTest where id>10)
-            //里面的子查询没有值，所以where id<ALL()时都为true，实际上是删除所有记录
-            //如果改成ANY，那么什么记录都不删
-            Value l = left.getValue(session);
-            if (rows.getRowCount() == 0) {
-                return ValueBoolean.get(all);
-            } else if (l == ValueNull.INSTANCE) {//如果left是null，那么返回null
-                return l;
-            }
-            if (!session.getDatabase().getSettings().optimizeInSelect) {
-                return getValueSlow(rows, l);
-            }
-            if (all || (compareType != Comparison.EQUAL &&
-                    compareType != Comparison.EQUAL_NULL_SAFE)) {
-                return getValueSlow(rows, l);
-            }
-            //下面代码是处理非all，且是EQUAL或EQUAL_NULL_SAFE的情况
-            
-            //获得结果集中第一列的类型
-            int dataType = rows.getColumnType(0);
-            //如果列的类型是null，那么返回false
-            if (dataType == Value.NULL) {
-                return ValueBoolean.get(false);
-            }
-            l = l.convertTo(dataType);//把left的值转成结果集中第一列的类型，然后判断结果集中是否包含它，返回true
-            if (rows.containsDistinct(new Value[] { l })) {
-                return ValueBoolean.get(true);
-            }
-            //结果集中不包含left且有null，那么返回null
-            if (rows.containsDistinct(new Value[] { ValueNull.INSTANCE })) {
-                return ValueNull.INSTANCE;
-            }
-            return ValueBoolean.get(false);
-        } finally {
-            rows.close();
+        if (!query.hasOrder()) {
+            query.setDistinct(true);
         }
+
+        // 子查询没有记录时，如果是ALL类型的子查询，那么认为条件为true，
+        // 否则为false，
+        // 假设表中字段id的值是1到6，这条语句
+        // delete from ConditionInSelectTest where id > ALL(select id from ConditionInSelectTest where id>10)
+        // 里面的子查询没有值，所以where id<ALL()时都为true，实际上是删除所有记录
+        // 如果改成ANY，那么什么记录都不删
+        ResultInterface rows = query.query(0);
+        Value l = left.getValue(session);
+        if (!rows.hasNext()) {
+            return ValueBoolean.get(all);
+        } else if (l == ValueNull.INSTANCE) { //如果left是null，那么返回null
+            return l;
+        }
+        if (!session.getDatabase().getSettings().optimizeInSelect) {
+            return getValueSlow(rows, l);
+        }
+        if (all || (compareType != Comparison.EQUAL &&
+                compareType != Comparison.EQUAL_NULL_SAFE)) {
+            return getValueSlow(rows, l);
+        }
+        //下面代码是处理非all，且是EQUAL或EQUAL_NULL_SAFE的情况
+        
+        //获得结果集中第一列的类型
+        int dataType = rows.getColumnType(0);
+        //如果列的类型是null，那么返回false
+        if (dataType == Value.NULL) { 
+            return ValueBoolean.get(false);
+        }
+        l = l.convertTo(dataType); //把left的值转成结果集中第一列的类型，然后判断结果集中是否包含它，返回true
+        if (rows.containsDistinct(new Value[] { l })) {
+            return ValueBoolean.get(true);
+        }
+        //结果集中不包含left且有null，那么返回null
+        if (rows.containsDistinct(new Value[] { ValueNull.INSTANCE })) {
+            return ValueNull.INSTANCE;
+        }
+        return ValueBoolean.get(false);
     }
 
-    private Value getValueSlow(LocalResult rows, Value l) {
+    private Value getValueSlow(ResultInterface rows, Value l) {
         // this only returns the correct result if the result has at least one
         // row, and if l is not null
         boolean hasNull = false;
@@ -127,10 +125,13 @@ public class ConditionInSelect extends Condition {
     public Expression optimize(Session session) {
         left = left.optimize(session);
         query.setRandomAccessResult(true);
-        query.prepare();
-        //如where id in(select id,name from ConditionInSelectTest where id=3)
-        //org.h2.jdbc.JdbcSQLException: Subquery is not a single column query
-        //子查询不能多于1个列
+//<<<<<<< HEAD
+//        query.prepare();
+//        //如where id in(select id,name from ConditionInSelectTest where id=3)
+//        //org.h2.jdbc.JdbcSQLException: Subquery is not a single column query
+//        //子查询不能多于1个列
+//=======
+        session.optimizeQueryExpression(query);
         if (query.getColumnCount() != 1) {
             throw DbException.get(ErrorCode.SUBQUERY_IS_NOT_SINGLE_COLUMN);
         }

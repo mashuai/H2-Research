@@ -5,19 +5,18 @@
  */
 package org.h2.util;
 
-import static java.lang.Math.abs;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Currency;
 import java.util.GregorianCalendar;
 import java.util.Locale;
 import java.util.TimeZone;
-
 import org.h2.api.ErrorCode;
 import org.h2.message.DbException;
 
@@ -122,11 +121,10 @@ public class ToChar {
      * @param nlsParam the NLS parameter (if any)
      * @return the formatted number
      */
-    public static String toChar(BigDecimal number, String format,
-            String nlsParam) {
+    public static String toChar(BigDecimal number, String format, String nlsParam) {
 
         // short-circuit logic for formats that don't follow common logic below
-        String formatUp = format != null ? format.toUpperCase() : null;
+        String formatUp = format != null ? StringUtils.toUpperEnglish(format) : null;
         if (formatUp == null || formatUp.equals("TM") || formatUp.equals("TM9")) {
             String s = number.toPlainString();
             return s.startsWith("0.") ? s.substring(1) : s;
@@ -134,7 +132,7 @@ public class ToChar {
             int pow = number.precision() - number.scale() - 1;
             number = number.movePointLeft(pow);
             return number.toPlainString() + "E" +
-                    (pow < 0 ? '-' : '+') + (abs(pow) < 10 ? "0" : "") + abs(pow);
+                    (pow < 0 ? '-' : '+') + (Math.abs(pow) < 10 ? "0" : "") + Math.abs(pow);
         } else if (formatUp.equals("RN")) {
             boolean lowercase = format.startsWith("r");
             String rn = StringUtils.pad(toRomanNumeral(number.intValue()), 15, " ", false);
@@ -220,7 +218,9 @@ public class ToChar {
         }
 
         StringBuilder output = new StringBuilder();
-        String unscaled = number.unscaledValue().abs().toString();
+        String unscaled = (number.abs().compareTo(BigDecimal.ONE) < 0 ?
+                zeroesAfterDecimalSeparator(number) : "") +
+                number.unscaledValue().abs().toString();
 
         // start at the decimal point and fill in the numbers to the left,
         // working our way from right to left
@@ -329,6 +329,25 @@ public class ToChar {
         return output.toString();
     }
 
+    private static String zeroesAfterDecimalSeparator(BigDecimal number) {
+        final String numberStr = number.toString();
+        final int idx = numberStr.indexOf('.');
+        if (idx < 0) {
+            return "";
+        }
+        int i = idx + 1;
+        boolean allZeroes = true;
+        for (; i < numberStr.length(); i++) {
+            if (numberStr.charAt(i) != '0') {
+                allZeroes = false;
+                break;
+            }
+        }
+        final char[] zeroes = new char[allZeroes ? numberStr.length() - idx - 1: i - 1 - idx];
+        Arrays.fill(zeroes, '0');
+        return String.valueOf(zeroes);
+    }
+
     private static void addSign(StringBuilder output, int signum,
             boolean leadingSign, boolean trailingSign, boolean trailingMinus,
             boolean angleBrackets, boolean fillMode) {
@@ -407,7 +426,7 @@ public class ToChar {
 
     private static String toHex(BigDecimal number, String format) {
 
-        boolean fillMode = !format.toUpperCase().startsWith("FM");
+        boolean fillMode = !StringUtils.toUpperEnglish(format).startsWith("FM");
         boolean uppercase = !format.contains("x");
         boolean zeroPadded = format.startsWith("0");
         int digits = 0;
@@ -424,7 +443,7 @@ public class ToChar {
             hex = StringUtils.pad("", digits + 1, "#", true);
         } else {
             if (uppercase) {
-                hex = hex.toUpperCase();
+                hex = StringUtils.toUpperEnglish(hex);
             }
             if (zeroPadded) {
                 hex = StringUtils.pad(hex, digits, "0", false);
@@ -633,7 +652,7 @@ public class ToChar {
                         cal.get(Calendar.DAY_OF_MONTH)));
                 i += 2;
             } else if ((cap = containsAt(format, i, "DY")) != null) {
-                String day = new SimpleDateFormat("EEE").format(ts).toUpperCase();
+                String day = StringUtils.toUpperEnglish(new SimpleDateFormat("EEE").format(ts));
                 output.append(cap.apply(day));
                 i += 2;
             } else if ((cap = containsAt(format, i, "DAY")) != null) {
@@ -915,12 +934,12 @@ public class ToChar {
             }
             switch (this) {
             case UPPERCASE:
-                return s.toUpperCase();
+                return StringUtils.toUpperEnglish(s);
             case LOWERCASE:
-                return s.toLowerCase();
+                return StringUtils.toLowerEnglish(s);
             case CAPITALIZE:
                 return Character.toUpperCase(s.charAt(0)) +
-                        (s.length() > 1 ? s.toLowerCase().substring(1) : "");
+                        (s.length() > 1 ? StringUtils.toLowerEnglish(s).substring(1) : "");
             default:
                 throw new IllegalArgumentException(
                         "Unknown capitalization strategy: " + this);

@@ -71,12 +71,12 @@ public class IndexCursor implements Cursor {
     }
 
     /**
-     * Re-evaluate the start and end values of the index search for rows.
+     * Prepare this index cursor to make a lookup in index.
      *
-     * @param s the session
-     * @param indexConditions the index conditions
+     * @param s Session.
+     * @param indexConditions Index conditions.
      */
-    public void find(Session s, ArrayList<IndexCondition> indexConditions) {
+    public void prepare(Session s, ArrayList<IndexCondition> indexConditions) {
         this.session = s;
         alwaysFalse = false;
         start = end = null;
@@ -154,13 +154,23 @@ public class IndexCursor implements Cursor {
                 }
             }
         }
+    }
+
+    /**
+     * Re-evaluate the start and end values of the index search for rows.
+     *
+     * @param s the session
+     * @param indexConditions the index conditions
+     */
+    public void find(Session s, ArrayList<IndexCondition> indexConditions) {
+        prepare(s, indexConditions);
         if (inColumn != null) {
             return;
         }
         if (!alwaysFalse) {
             if (intersects != null && index instanceof SpatialIndex) {
                 cursor = ((SpatialIndex) index).findByGeometry(tableFilter,
-                        intersects);
+                        start, end, intersects);
             } else {
                 cursor = index.find(tableFilter, start, end);
             }
@@ -261,6 +271,24 @@ public class IndexCursor implements Cursor {
         return alwaysFalse;
     }
 
+    /**
+     * Get start search row.
+     *
+     * @return search row
+     */
+    public SearchRow getStart() {
+        return start;
+    }
+
+    /**
+     * Get end search row.
+     *
+     * @return search row
+     */
+    public SearchRow getEnd() {
+        return end;
+    }
+
     @Override
     public Row get() {
         if (cursor == null) {
@@ -328,7 +356,7 @@ public class IndexCursor implements Cursor {
 
     @Override
     public boolean previous() {
-        throw DbException.throwInternalError();
+        throw DbException.throwInternalError(toString());
     }
 
 }

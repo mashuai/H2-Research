@@ -9,6 +9,10 @@
 22012=Divisão por zero: {0}
 22018=Erro na conversão de dado, convertendo {0}
 22025=Erro em LIKE ESCAPE: {0}
+22030=#Value not permitted for column {0}: {1}
+22031=#Value not a member of enumerators {0}: {1}
+22032=#Empty enums are not allowed
+22033=#Duplicate enumerators are not allowed for enum types: {0}
 23502=NULL não é permitido para a coluna {0}
 23503=Violação da integridade de restrição: {0}
 23505=Violação de índice único ou de chave primária: {0}
@@ -78,10 +82,12 @@
 90048=Versão do arquivo de base de dados não é suportado, ou o cabeçalho do arquivo é inválido, no arquivo {0}
 90049=Erro de encriptação no arquivo {0}
 90050=Erro no formato da senha, deveria ser: arquivo de senha <espaço> senha do usuário
+90051=#Scale(${0}) must not be bigger than precision({1})
 90052=A Subquery não é de coluna única
 90053=A Subquery contém mais de uma linha
 90054=Uso inválido da função {0} agregada
 90055=Cipher {0} não é suportado
+90056=Function {0}: Invalid date format: {1}
 90057=Restrição {0} não foi encontrada
 90058=#Commit or rollback is not allowed within a trigger
 90059=Nome da coluna {0} é ambíguo.
@@ -112,7 +118,7 @@
 90084=Não pode apagar a última coluna {0}
 90085=índice {0} pertence a uma restrição {1}
 90086=Classe {0} não foi encontrada
-90087=Método {0} não foi encontrado
+90087=#Method {0} not found
 90088=Modo {0} desconhecido
 90089=A coleção não pode ser alterada, porque existe uma tabela de dados: {0}
 90090=Esquema {0} não pode ser apagado
@@ -165,6 +171,7 @@
 90140=#The result set is readonly. You may need to use conn.createStatement(.., ResultSet.CONCUR_UPDATABLE).
 90141=#Serializer cannot be changed because there is a data table: {0}
 90142=#Step size must not be zero
+90143=##Row {1} not found in primary index {0}
 HY000=Erro geral: {0}
 HY004=Tipo de dados desconhecido: {0}
 HYC00=Recurso não suportado: {0}

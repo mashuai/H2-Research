@@ -7,7 +7,6 @@ package org.h2.constraint;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-
 import org.h2.api.ErrorCode;
 import org.h2.command.Parser;
 import org.h2.command.Prepared;
@@ -302,9 +301,16 @@ public class ConstraintReferential extends Constraint {
 
     @Override
     public void checkRow(Session session, Table t, Row oldRow, Row newRow) {
-        if (!database.getReferentialIntegrity()) { //设置REFERENTIAL_INTEGRITY动态参数可禁用检查
+        //设置REFERENTIAL_INTEGRITY动态参数可禁用检查
+        //例如: SET REFERENTIAL_INTEGRITY 0
+        //这是全局开关
+        if (!database.getReferentialIntegrity()) {
             return;
         }
+        
+        //例如: ALTER TABLE mytable SET REFERENTIAL_INTEGRITY FALSE
+        //就可以禁用检查
+        //这是针对具体表的开关
         if (!table.getCheckForeignKeyConstraints() ||
                 !refTable.getCheckForeignKeyConstraints()) {
             return;
@@ -314,6 +320,7 @@ public class ConstraintReferential extends Constraint {
                 checkRowOwnTable(session, oldRow, newRow);
             }
         }
+        //不能用else if，因为在自引用的情况下需要检查两次
         if (t == refTable) {
             checkRowRefTable(session, oldRow, newRow);
         }
@@ -330,7 +337,7 @@ public class ConstraintReferential extends Constraint {
     
     //此方法只处理insert、update
     private void checkRowOwnTable(Session session, Row oldRow, Row newRow) {
-        if (newRow == null) { //主表删除记录无须检查
+        if (newRow == null) { //主表删除记录无须检查 (这里的主表是包含FOREIGN KEY的表)
             return;
         }
         boolean constraintColumnsEqual = oldRow != null;
@@ -405,7 +412,7 @@ public class ConstraintReferential extends Constraint {
                 int idx = cols[i].getColumnId();
                 Value c = check.getValue(idx);
                 Value f = found.getValue(idx);
-                if (searchTable.compareTypeSave(c, f) != 0) {
+                if (searchTable.compareTypeSafe(c, f) != 0) {
                     allEqual = false;
                     break;
                 }
@@ -475,7 +482,7 @@ public class ConstraintReferential extends Constraint {
             if (updateAction == RESTRICT) {
                 checkRow(session, oldRow);
             } else {
-            	//ON DELETE CASCADE和ON DELETE SET DEFAULT都是一样
+            	//ON UPDATE CASCADE和ON UPDATE SET DEFAULT都是一样
                 //都是UPDATE PUBLIC.MYTABLE SET F1=? WHERE F1=?
                 Prepared updateCommand = getUpdate(session);
                 if (updateAction == CASCADE) { //getUpdate(session)中会跳过CASCADE的情形，所以这里补上
@@ -586,7 +593,7 @@ public class ConstraintReferential extends Constraint {
         StatementBuilder buff = new StatementBuilder();
         appendUpdate(buff);
         appendWhere(buff);
-        //ON DELETE CASCADE和ON DELETE SET DEFAULT都是一样
+        //ON UPDATE CASCADE和ON UPDATE SET DEFAULT都是一样
         //都是UPDATE PUBLIC.MYTABLE SET F1=? WHERE F1=?
         updateSQL = buff.toString();
     }
@@ -655,7 +662,7 @@ public class ConstraintReferential extends Constraint {
         } else if (this.refIndex == index) {
             refIndexOwner = true;
         } else {
-            DbException.throwInternalError();
+            DbException.throwInternalError(index + " " + toString());
         }
     }
 

@@ -5,6 +5,7 @@
  */
 package org.h2.index;
 
+import java.util.HashSet;
 import org.h2.engine.Session;
 import org.h2.message.DbException;
 import org.h2.result.Row;
@@ -67,7 +68,7 @@ public class HashIndex extends BaseIndex {
     public Cursor find(Session session, SearchRow first, SearchRow last) {
         if (first == null || last == null) {
             // TODO hash index: should additionally check if values are the same
-            throw DbException.throwInternalError();
+            throw DbException.throwInternalError(first + " " + last);
         }
         Value v = first.getValue(indexColumn);
         /*
@@ -113,8 +114,9 @@ public class HashIndex extends BaseIndex {
     }
 
     @Override
-    public double getCost(Session session, int[] masks, TableFilter filter,
-            SortOrder sortOrder) {
+    public double getCost(Session session, int[] masks,
+            TableFilter[] filters, int filter, SortOrder sortOrder,
+            HashSet<Column> allColumnsSet) {
         for (Column column : columns) {
             int index = column.getColumnId();
             int mask = masks[index];

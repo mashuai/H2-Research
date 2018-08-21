@@ -437,6 +437,7 @@ public class Server extends Tool implements Runnable, ShutdownHandler {
      * If no port is specified, the default port is used if possible,
      * and if this port is already used, a random port is used.
      * Use getPort() or getURL() after starting to retrieve the port.
+     * </p>
      *
      * @param args the argument list
      * @return the server
@@ -463,6 +464,7 @@ public class Server extends Tool implements Runnable, ShutdownHandler {
      * If no port is specified, the default port is used if possible,
      * and if this port is already used, a random port is used.
      * Use getPort() or getURL() after starting to retrieve the port.
+     * </p>
      *
      * @param args the argument list
      * @return the server
@@ -668,9 +670,9 @@ public class Server extends Tool implements Runnable, ShutdownHandler {
                 // Mac OS: to open a page with Safari, use "open -a Safari"
                 Runtime.getRuntime().exec(new String[] { "open", url });
             } else {
-                String[] browsers = { "chromium", "google-chrome", "firefox",
-                        "mozilla-firefox", "mozilla", "konqueror", "netscape",
-                        "opera", "midori" };
+                String[] browsers = { "xdg-open", "chromium", "google-chrome",
+                        "firefox", "mozilla-firefox", "mozilla", "konqueror",
+                        "netscape", "opera", "midori" };
                 boolean ok = false;
                 for (String b : browsers) {
                     try {

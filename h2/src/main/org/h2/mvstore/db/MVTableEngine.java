@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 import org.h2.api.ErrorCode;
 import org.h2.api.TableEngine;
@@ -141,6 +142,13 @@ public class MVTableEngine implements TableEngine {
 
         private String fileName;
 
+        /**
+         * Open the store for this database.
+         *
+         * @param db the database
+         * @param builder the builder
+         * @param encrypted whether the store is encrypted
+         */
         void open(Database db, MVStore.Builder builder, boolean encrypted) {
             this.encrypted = encrypted;
             try {
@@ -161,6 +169,13 @@ public class MVTableEngine implements TableEngine {
             }
         }
 
+        /**
+         * Convert the illegal state exception to the correct database
+         * exception.
+         *
+         * @param e the illegal state exception
+         * @return the database exception
+         */
         DbException convertIllegalStateException(IllegalStateException e) {
             int errorCode = DataUtils.getErrorCode(e.getMessage());
             if (errorCode == DataUtils.ERROR_FILE_CORRUPT) {
@@ -336,12 +351,12 @@ public class MVTableEngine implements TableEngine {
          */
         public void compactFile(long maxCompactTime) {
             store.setRetentionTime(0);
-            long start = System.currentTimeMillis();
+            long start = System.nanoTime();
             while (store.compact(95, 16 * 1024 * 1024)) {
                 store.sync();
                 store.compactMoveChunks(95, 16 * 1024 * 1024);
-                long time = System.currentTimeMillis() - start;
-                if (time > maxCompactTime) {
+                long time = System.nanoTime() - start;
+                if (time > TimeUnit.MILLISECONDS.toNanos(maxCompactTime)) {
                     break;
                 }
             }
@@ -434,7 +449,7 @@ public class MVTableEngine implements TableEngine {
 
         @Override
         public String getState() {
-            switch(state) {
+            switch (state) {
             case IN_DOUBT:
                 return "IN_DOUBT";
             case COMMIT:

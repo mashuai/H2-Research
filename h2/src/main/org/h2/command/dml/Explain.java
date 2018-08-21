@@ -40,6 +40,10 @@ public class Explain extends Prepared {
         this.command = command;
     }
 
+    public Prepared getCommand() {
+        return command;
+    }
+
     @Override
     public void prepare() {
         command.prepare();
@@ -52,6 +56,14 @@ public class Explain extends Prepared {
     @Override
     public ResultInterface queryMeta() {
         return query(-1);
+    }
+
+    @Override
+    protected void checkParameters() {
+        // Check params only in case of EXPLAIN ANALYZE
+        if (executeCommand) {
+            super.checkParameters();
+        }
     }
 
     @Override
@@ -148,6 +160,6 @@ public class Explain extends Prepared {
 
     @Override
     public int getType() {
-        return CommandInterface.EXPLAIN;
+        return executeCommand ? CommandInterface.EXPLAIN_ANALYZE : CommandInterface.EXPLAIN;
     }
 }

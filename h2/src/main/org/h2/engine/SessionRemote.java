@@ -59,6 +59,7 @@ public class SessionRemote extends SessionWithState implements DataHandler {
     public static final int SESSION_SET_AUTOCOMMIT = 15;
     public static final int SESSION_HAS_PENDING_TRANSACTION = 16;
     public static final int LOB_READ = 17;
+    public static final int SESSION_PREPARE_READ_PARAMS2 = 18;
 
     public static final int STATUS_ERROR = 0;
     public static final int STATUS_OK = 1;
@@ -93,7 +94,7 @@ public class SessionRemote extends SessionWithState implements DataHandler {
 
     private JavaObjectSerializer javaObjectSerializer;
     private volatile boolean javaObjectSerializerInitialized;
-    
+
     private CompareMode compareMode = CompareMode.getInstance(null, 0);
 
     public SessionRemote(ConnectionInfo ci) {
@@ -121,7 +122,7 @@ public class SessionRemote extends SessionWithState implements DataHandler {
         trans.setSSL(ci.isSSL());
         trans.init();
         trans.writeInt(Constants.TCP_PROTOCOL_VERSION_6);
-        trans.writeInt(Constants.TCP_PROTOCOL_VERSION_15);
+        trans.writeInt(Constants.TCP_PROTOCOL_VERSION_16);
         trans.writeString(db);
         trans.writeString(ci.getOriginalURL());
         trans.writeString(ci.getUserName());
@@ -220,6 +221,10 @@ public class SessionRemote extends SessionWithState implements DataHandler {
         }
     }
 
+    public int getClientVersion() {
+        return clientVersion;
+    }
+
     @Override
     public boolean getAutoCommit() {
         return autoCommit;
@@ -245,9 +250,9 @@ public class SessionRemote extends SessionWithState implements DataHandler {
         }
     }
 
-    private void setAutoCommitSend(boolean autoCommit) {
-        //VERSION_8开始通过SESSION_SET_AUTOCOMMIT协议指令，以前的版本通过SET AUTOCOMMIT语句
-        //对于commit和rollback则没有对应的协议指令，只能通过COMMIT、ROLLBACK语句
+    // VERSION_8开始通过SESSION_SET_AUTOCOMMIT协议指令，以前的版本通过SET AUTOCOMMIT语句
+    // 对于commit和rollback则没有对应的协议指令，只能通过COMMIT、ROLLBACK语句
+    private synchronized void setAutoCommitSend(boolean autoCommit) {
         if (clientVersion >= Constants.TCP_PROTOCOL_VERSION_8) {
             for (int i = 0, count = 0; i < transferList.size(); i++) {
                 Transfer transfer = transferList.get(i);
@@ -871,9 +876,24 @@ public class SessionRemote extends SessionWithState implements DataHandler {
     public void addTemporaryLob(Value v) {
         // do nothing
     }
-    
+
     @Override
     public CompareMode getCompareMode() {
         return compareMode;
+    }
+
+    @Override
+    public boolean isRemote() {
+        return true;
+    }
+
+    @Override
+    public String getCurrentSchemaName() {
+        throw DbException.getUnsupportedException("getSchema && remote session");
+    }
+
+    @Override
+    public void setCurrentSchemaName(String schema) {
+        throw DbException.getUnsupportedException("setSchema && remote session");
     }
 }

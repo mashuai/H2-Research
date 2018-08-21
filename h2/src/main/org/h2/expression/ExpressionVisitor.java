@@ -10,6 +10,8 @@ import org.h2.engine.DbObject;
 import org.h2.table.Column;
 import org.h2.table.ColumnResolver;
 import org.h2.table.Table;
+import org.h2.table.TableFilter;
+import org.h2.util.New;
 
 /**
  * The visitor pattern is used to iterate through all expressions of a query
@@ -116,8 +118,7 @@ public class ExpressionVisitor {
     private ExpressionVisitor(int type,
             int queryLevel,
             HashSet<DbObject> dependencies,
-            HashSet<Column> columns,
-            Table table, ColumnResolver resolver,
+            HashSet<Column> columns, Table table, ColumnResolver resolver,
             long[] maxDataModificationId) {
         this.type = type;
         this.queryLevel = queryLevel;
@@ -284,6 +285,23 @@ public class ExpressionVisitor {
      */
     public int getType() {
         return type;
+    }
+
+    /**
+     * Get the set of columns of all tables.
+     *
+     * @param filters the filters
+     * @return the set of columns
+     */
+    public static HashSet<Column> allColumnsForTableFilters(TableFilter[] filters) {
+        HashSet<Column> allColumnsSet = New.hashSet();
+        for (int i = 0; i < filters.length; i++) {
+            if (filters[i].getSelect() != null) {
+                filters[i].getSelect().isEverything(
+                        ExpressionVisitor.getColumnsVisitor(allColumnsSet));
+            }
+        }
+        return allColumnsSet;
     }
 
 }

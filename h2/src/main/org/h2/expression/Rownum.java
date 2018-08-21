@@ -21,6 +21,9 @@ public class Rownum extends Expression {
     private final Prepared prepared;
 
     public Rownum(Prepared prepared) {
+        if (prepared == null) {
+            throw DbException.throwInternalError();
+        }
         this.prepared = prepared;
     }
 
@@ -76,7 +79,7 @@ public class Rownum extends Expression {
 
     @Override
     public boolean isEverything(ExpressionVisitor visitor) {
-        switch(visitor.getType()) {
+        switch (visitor.getType()) {
         case ExpressionVisitor.QUERY_COMPARABLE:
         case ExpressionVisitor.OPTIMIZABLE_MIN_MAX_COUNT_ALL:
         case ExpressionVisitor.DETERMINISTIC:

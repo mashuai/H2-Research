@@ -328,7 +328,7 @@ public class DbSettings extends SettingsBase {
      * (default: null).<br />
      * The default table engine to use for new tables.
      */
-    public String defaultTableEngine = get("DEFAULT_TABLE_ENGINE", null);
+    public final String defaultTableEngine = get("DEFAULT_TABLE_ENGINE", null);
 
     /**
      * Database setting <code>MV_STORE</code>
@@ -343,6 +343,12 @@ public class DbSettings extends SettingsBase {
      * Compress data when storing.
      */
     public final boolean compressData = get("COMPRESS", false);
+
+    /**
+     * Database setting <code>MULTI_THREADED</code>
+     * (default: false).<br />
+     */
+    public final boolean multiThreaded = get("MULTI_THREADED", false);
 
     private DbSettings(HashMap<String, String> s) {
         super(s);

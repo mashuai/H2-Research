@@ -22,6 +22,7 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -32,6 +33,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.SimpleTimeZone;
+import java.util.concurrent.TimeUnit;
 import org.h2.jdbc.JdbcConnection;
 import org.h2.message.DbException;
 import org.h2.store.fs.FilePath;
@@ -127,6 +129,7 @@ public abstract class TestBase {
      *
      * @param seed the random seed value
      */
+    @SuppressWarnings("unused")
     public void testCase(int seed) throws Exception {
         // do nothing
     }
@@ -144,7 +147,7 @@ public abstract class TestBase {
         }
         try {
             init(conf);
-            start = System.currentTimeMillis();
+            start = System.nanoTime();
             test();
             println("");
         } catch (Throwable e) {
@@ -153,6 +156,7 @@ public abstract class TestBase {
             if (config.stopOnError) {
                 throw new AssertionError("ERROR");
             }
+            TestAll.atLeastOneTestFailed = true;
             if (e instanceof OutOfMemoryError) {
                 throw (OutOfMemoryError) e;
             }
@@ -256,10 +260,10 @@ public abstract class TestBase {
             // name = addOption(name, "RETENTION_TIME", "10");
             // name = addOption(name, "WRITE_DELAY", "10");
         }
-        if (config.memory) {
+        int idx = name.indexOf(':');
+        if (idx == -1 && config.memory) {
             name = "mem:" + name;
         } else {
-            int idx = name.indexOf(':');
             if (idx < 0 || idx > 10) {
                 // index > 10 if in options
                 name = getBaseDir() + "/" + name;
@@ -280,6 +284,8 @@ public abstract class TestBase {
         if (config.mvStore) {
             url = addOption(url, "MV_STORE", "true");
             // url = addOption(url, "MVCC", "true");
+        } else {
+            url = addOption(url, "MV_STORE", "false");
         }
         if (!config.memory) {
             if (config.smallLog && admin) {
@@ -299,7 +305,7 @@ public abstract class TestBase {
         } else if (config.throttle > 0) {
             url = addOption(url, "THROTTLE", "" + config.throttle);
         }
-        url = addOption(url, "LOCK_TIMEOUT", "50");
+        url = addOption(url, "LOCK_TIMEOUT", "" + config.lockTimeout);
         if (config.diskUndo && admin) {
             url = addOption(url, "MAX_MEMORY_UNDO", "3");
         }
@@ -309,6 +315,12 @@ public abstract class TestBase {
         }
         if (config.mvcc) {
             url = addOption(url, "MVCC", "TRUE");
+        }
+        if (config.multiThreaded) {
+            url = addOption(url, "MULTI_THREADED", "TRUE");
+        }
+        if (config.lazy) {
+            url = addOption(url, "LAZY_QUERY_EXECUTION", "1");
         }
         if (config.cacheType != null && admin) {
             url = addOption(url, "CACHE_TYPE", config.cacheType);
@@ -323,8 +335,8 @@ public abstract class TestBase {
         if (config.defrag) {
             url = addOption(url, "DEFRAG_ALWAYS", "TRUE");
         }
-        if (config.nestedJoins) {
-            url = addOption(url, "NESTED_JOINS", "TRUE");
+        if (config.collation != null) {
+            url = addOption(url, "COLLATION", config.collation);
         }
         return "jdbc:h2:" + url;
     }
@@ -448,6 +460,21 @@ public abstract class TestBase {
      */
     protected void fail(String string) {
         lastPrint = 0;
+        if (string.length() > 100) {
+            // avoid long strings with special characters, because they are slow
+            // to display in Eclipse
+            char[] data = string.toCharArray();
+            for (int i = 0; i < data.length; i++) {
+                char c = data[i];
+                if (c >= 128 || c < 32) {
+                    data[i] = (char) ('a' + (c & 15));
+                    string = null;
+                }
+            }
+            if (string == null) {
+                string = new String(data);
+            }
+        }
         println(string);
         throw new AssertionError(string);
     }
@@ -501,10 +528,10 @@ public abstract class TestBase {
      * @param s the message
      */
     public void println(String s) {
-        long now = System.currentTimeMillis();
-        if (now > lastPrint + 1000) {
+        long now = System.nanoTime();
+        if (now > lastPrint + TimeUnit.SECONDS.toNanos(1)) {
             lastPrint = now;
-            long time = now - start;
+            long time = TimeUnit.NANOSECONDS.toMillis(now - start);
             printlnWithTime(time, getClass().getName() + " " + s);
         }
     }
@@ -644,7 +671,9 @@ public abstract class TestBase {
     }
 
     /**
-     * Check if two values are equal, and if not throw an exception.
+     * Check if two arrays are equal, and if not throw an exception.
+     * If some of the elements in the arrays are themselves arrays this
+     * check is called recursively.
      *
      * @param expected the expected value
      * @param actual the actual value
@@ -661,9 +690,28 @@ public abstract class TestBase {
                 if (expected[i] != actual[i]) {
                     fail("[" + i + "]: expected: " + expected[i] + " actual: " + actual[i]);
                 }
+            } else if (expected[i] instanceof Object[] && actual[i] instanceof Object[]) {
+                assertEquals((Object[]) expected[i], (Object[]) actual[i]);
             } else if (!expected[i].equals(actual[i])) {
                 fail("[" + i + "]: expected: " + expected[i] + " actual: " + actual[i]);
             }
+        }
+    }
+
+    /**
+     * Check if two values are equal, and if not throw an exception.
+     *
+     * @param expected the expected value
+     * @param actual the actual value
+     * @throws AssertionError if the values are not equal
+     */
+    public void assertEquals(Object expected, Object actual) {
+        if (expected == null || actual == null) {
+            assertTrue(expected == actual);
+            return;
+        }
+        if (!expected.equals(actual)) {
+            fail(" expected: " + expected + " actual: " + actual);
         }
     }
 
@@ -744,6 +792,9 @@ public abstract class TestBase {
                 String s = expected.substring(0, i);
                 if (!actual.startsWith(s)) {
                     expected = expected.substring(0, i) + "<*>" + expected.substring(i);
+                    if (al > 20) {
+                        expected = "@" + i + " " + expected;
+                    }
                     break;
                 }
             }
@@ -1005,17 +1056,45 @@ public abstract class TestBase {
     /**
      * Check that executing the specified query results in the specified error.
      *
-     * @param expectedErrorMessage the expected error message
+     * @param expectedErrorCode the expected error code
      * @param stat the statement
      * @param sql the SQL statement to execute
      */
     protected void assertThrows(int expectedErrorCode, Statement stat,
             String sql) {
         try {
-            stat.execute(sql);
+            execute(stat, sql);
             fail("Expected error: " + expectedErrorCode);
         } catch (SQLException ex) {
             assertEquals(expectedErrorCode, ex.getErrorCode());
+        }
+    }
+
+    /**
+     * Execute the statement.
+     *
+     * @param stat the statement
+     */
+    protected void execute(PreparedStatement stat) throws SQLException {
+        execute(stat, null);
+    }
+
+    /**
+     * Execute the statement.
+     *
+     * @param stat the statement
+     * @param sql the SQL command
+     */
+    protected void execute(Statement stat, String sql) throws SQLException {
+        boolean query = sql == null ? ((PreparedStatement) stat).execute() :
+            stat.execute(sql);
+
+        if (query && config.lazy) {
+            try (ResultSet rs = stat.getResultSet()) {
+                while (rs.next()) {
+                    // just loop
+                }
+            }
         }
     }
 
@@ -1275,7 +1354,9 @@ public abstract class TestBase {
      */
     protected void assertEquals(Integer expected, Integer actual) {
         if (expected == null || actual == null) {
-            assertTrue(expected == null && actual == null);
+            if (expected != actual) {
+                assertEquals("" + expected, "" + actual);
+            }
         } else {
             assertEquals(expected.intValue(), actual.intValue());
         }
@@ -1450,7 +1531,10 @@ public abstract class TestBase {
                 if (errorCode != expectedErrorCode) {
                     AssertionError ae = new AssertionError(
                             "Expected an SQLException or DbException with error code "
-                                    + expectedErrorCode);
+                                    + expectedErrorCode
+                                    + ", but got a " + (t == null ? "null" :
+                                            t.getClass().getName() + " exception "
+                                    + " with error code " + errorCode));
                     ae.initCause(t);
                     throw ae;
                 }

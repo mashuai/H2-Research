@@ -17,7 +17,7 @@ import java.util.Arrays;
  */
 public class CheckTextFiles {
 
-    private static final int MAX_SOURCE_LINE_SIZE = 100;
+    private static final int MAX_SOURCE_LINE_SIZE = 120;
 
     // must contain "+" otherwise this here counts as well
     private static final String COPYRIGHT = "Copyright 2004-2014 " +
@@ -27,7 +27,7 @@ public class CheckTextFiles {
 
     private static final String[] SUFFIX_CHECK = { "html", "jsp", "js", "css",
             "bat", "nsi", "java", "txt", "properties", "sql", "xml", "csv",
-            "Driver", "prefs" };
+            "Driver", "Processor", "prefs" };
     private static final String[] SUFFIX_IGNORE = { "gif", "png", "odg", "ico",
             "sxd", "layout", "res", "win", "jar", "task", "svg", "MF", "mf",
             "sh", "DS_Store", "prop" };
@@ -190,6 +190,9 @@ public class CheckTextFiles {
                     line++;
                     int lineLength = i - startLinePos;
                     if (file.getName().endsWith(".java")) {
+                        if (i > 0 && data[i - 1] == '\r') {
+                            lineLength--;
+                        }
                         if (lineLength > MAX_SOURCE_LINE_SIZE) {
                             fail(file, "line too long: " + lineLength, line);
                         }

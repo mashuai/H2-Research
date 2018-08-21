@@ -6,10 +6,10 @@
 package org.h2.test.db;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
 import org.h2.store.fs.FileUtils;
@@ -32,6 +32,7 @@ public class TestTempTables extends TestBase {
     @Override
     public void test() throws SQLException {
         deleteDb("tempTables");
+        testAnalyzeReuseObjectId();
         testTempSequence();
         testTempFileResultSet();
         testTempTableResultSet();
@@ -46,7 +47,23 @@ public class TestTempTables extends TestBase {
         c1.close();
         c2.close();
         testLotsOfTables();
+        testCreateAsSelectDistinct();
         deleteDb("tempTables");
+    }
+
+    private void testAnalyzeReuseObjectId() throws SQLException {
+        deleteDb("tempTables");
+        Connection conn = getConnection("tempTables");
+        Statement stat = conn.createStatement();
+        stat.execute("create local temporary table test(id identity)");
+        PreparedStatement prep = conn
+                .prepareStatement("insert into test values(null)");
+        for (int i = 0; i < 10000; i++) {
+            prep.execute();
+        }
+        stat.execute("create local temporary table " +
+                "test2(id identity) as select x from system_range(1, 10)");
+        conn.close();
     }
 
     private void testTempSequence() throws SQLException {
@@ -54,17 +71,28 @@ public class TestTempTables extends TestBase {
         Connection conn = getConnection("tempTables");
         Statement stat = conn.createStatement();
         stat.execute("create local temporary table test(id identity)");
+        ResultSet rs = stat.executeQuery("script");
+        boolean foundSequence = false;
+        while (rs.next()) {
+            if (rs.getString(1).startsWith("CREATE SEQUENCE")) {
+                foundSequence = true;
+            }
+        }
+        assertTrue(foundSequence);
         stat.execute("insert into test values(null)");
         stat.execute("shutdown");
         conn.close();
         conn = getConnection("tempTables");
-        ResultSet rs = conn.createStatement().executeQuery(
+        rs = conn.createStatement().executeQuery(
                 "select * from information_schema.sequences");
         assertFalse(rs.next());
         conn.close();
     }
 
     private void testTempFileResultSet() throws SQLException {
+        if (config.lazy) {
+            return;
+        }
         deleteDb("tempTables");
         Connection conn = getConnection("tempTables;MAX_MEMORY_ROWS=10");
         ResultSet rs1, rs2;
@@ -75,10 +103,10 @@ public class TestTempTables extends TestBase {
         rs1 = stat1.executeQuery("select * from system_range(1, 20)");
         rs2 = stat2.executeQuery("select * from system_range(1, 20)");
         for (int i = 0; i < 20; i++) {
-            rs1.next();
-            rs2.next();
-            rs1.getInt(1);
-            rs2.getInt(1);
+            assertTrue(rs1.next());
+            assertTrue(rs2.next());
+            assertEquals(i + 1, rs1.getInt(1));
+            assertEquals(i + 1, rs2.getInt(1));
         }
         rs2.close();
         // verify the temp table is not deleted yet
@@ -306,6 +334,26 @@ public class TestTempTables extends TestBase {
             stat.executeUpdate("create local temporary table t(id int)");
             stat.executeUpdate("drop table t");
         }
+        conn.close();
+    }
+
+    /**
+     * Issue #401: NPE in "SELECT DISTINCT * ORDER BY"
+     */
+    private void testCreateAsSelectDistinct() throws SQLException {
+        deleteDb("tempTables");
+        Connection conn = getConnection("tempTables;MAX_MEMORY_ROWS=1000");
+        Statement stat = conn.createStatement();
+        stat.execute("CREATE TABLE ONE(S1 VARCHAR(255), S2 VARCHAR(255))");
+        PreparedStatement prep = conn
+                .prepareStatement("insert into one values(?,?)");
+        for (int row = 0; row < 10000; row++) {
+            prep.setString(1, "abc");
+            prep.setString(2, "def" + row);
+            prep.execute();
+        }
+        stat.execute(
+                "CREATE TABLE TWO AS SELECT DISTINCT * FROM ONE ORDER BY S1");
         conn.close();
     }
 }

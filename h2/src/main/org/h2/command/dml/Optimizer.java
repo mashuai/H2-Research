@@ -6,6 +6,8 @@
 package org.h2.command.dml;
 
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
+
 import org.h2.engine.Session;
 import org.h2.expression.Expression;
 import org.h2.table.Plan;
@@ -23,7 +25,7 @@ class Optimizer {
     private static final int MAX_BRUTE_FORCE_FILTERS = 7;
     private static final int MAX_BRUTE_FORCE = 2000;
     private static final int MAX_GENETIC = 500;
-    private long start;
+    private long startNs;
     private BitField switched;
     
     //后面的plan个数等于前面的plan个数乘以后面的filter数
@@ -76,24 +78,31 @@ class Optimizer {
     }
 
     private void calculateBestPlan() {
-        start = System.currentTimeMillis();
         cost = -1;
-        if (filters.length == 1) {
+        if (filters.length == 1 || session.isForceJoinOrder()) {
             testPlan(filters);
-        } else if (filters.length <= MAX_BRUTE_FORCE_FILTERS) {
-            calculateBruteForceAll();
         } else {
-            calculateBruteForceSome();
-            random = new Random(0);
-            calculateGenetic();
+            startNs = System.nanoTime();
+            if (filters.length <= MAX_BRUTE_FORCE_FILTERS) {
+                calculateBruteForceAll();
+            } else {
+                calculateBruteForceSome();
+                random = new Random(0);
+                calculateGenetic();
+            }
         }
+    }
+
+    private void calculateFakePlan() {
+        cost = -1;
+        bestPlan = new Plan(filters, filters.length, condition);
     }
 
     private boolean canStop(int x) {
         if ((x & 127) == 0) {
-            long t = System.currentTimeMillis() - start;
+            long t = System.nanoTime() - startNs;
             // don't calculate for simple queries (no rows or so)
-            if (cost >= 0 && 10 * t > cost) {
+            if (cost >= 0 && 10 * t > cost * TimeUnit.MILLISECONDS.toNanos(1)) {
                 return true;
             }
         }
@@ -195,7 +204,7 @@ class Optimizer {
         }
     }
 
-    private boolean shuffleTwo(TableFilter[] f) { //随机把数组中的两个元素兑换1交
+    private boolean shuffleTwo(TableFilter[] f) { //随机把数组中的两个元素兑换1次
         int a = 0, b = 0, i = 0;
         for (; i < 20; i++) {
             a = random.nextInt(f.length);
@@ -226,15 +235,25 @@ class Optimizer {
 
     /**
      * Calculate the best query plan to use.
+     *
+     * @param parse If we do not need to really get the best plan because it is
+     *            a view parsing stage.
      */
-    void optimize() {
-        calculateBestPlan();
-        bestPlan.removeUnusableIndexConditions();
+    void optimize(boolean parse) {
+        if (parse) {
+            calculateFakePlan();
+        } else {
+            calculateBestPlan();
+            bestPlan.removeUnusableIndexConditions();
+        }
         TableFilter[] f2 = bestPlan.getFilters();
         topFilter = f2[0];
         for (int i = 0; i < f2.length - 1; i++) {
         	//见org.h2.command.Parser.parseJoinTableFilter(TableFilter, Select)中的注释
             f2[i].addJoin(f2[i + 1], false, false, null);
+        }
+        if (parse) {
+            return;
         }
         for (TableFilter f : f2) {
             PlanItem item = bestPlan.getItem(f);

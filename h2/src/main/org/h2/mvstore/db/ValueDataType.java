@@ -12,7 +12,6 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.Arrays;
-
 import org.h2.api.ErrorCode;
 import org.h2.message.DbException;
 import org.h2.mvstore.DataUtils;
@@ -23,6 +22,7 @@ import org.h2.mvstore.type.DataType;
 import org.h2.result.SortOrder;
 import org.h2.store.DataHandler;
 import org.h2.tools.SimpleResultSet;
+import org.h2.util.JdbcUtils;
 import org.h2.value.CompareMode;
 import org.h2.value.Value;
 import org.h2.value.ValueArray;
@@ -46,6 +46,7 @@ import org.h2.value.ValueStringFixed;
 import org.h2.value.ValueStringIgnoreCase;
 import org.h2.value.ValueTime;
 import org.h2.value.ValueTimestamp;
+import org.h2.value.ValueTimestampTimeZone;
 import org.h2.value.ValueUuid;
 
 /**
@@ -67,6 +68,7 @@ public class ValueDataType implements DataType {
     private static final int STRING_0_31 = 68;
     private static final int BYTES_0_31 = 100;
     private static final int SPATIAL_KEY_2D = 132;
+    private static final int CUSTOM_DATA_TYPE = 133;
 
     final DataHandler handler;
     final CompareMode compareMode;
@@ -98,8 +100,11 @@ public class ValueDataType implements DataType {
             int al = ax.length;
             int bl = bx.length;
             int len = Math.min(al, bl);
-            for (int i = 0; i < len; i++) {
-                int sortType = sortTypes[i];
+            for (int i = 0; i < len; i++) {int sortType;
+                // if(sortTypes==null)
+                //    sortType = 0;
+                // else sortType = sortTypes[i];
+                sortType = sortTypes[i];
                 int comp = compareValues(ax[i], bx[i], sortType);
                 if (comp != 0) {
                     return comp;
@@ -133,18 +138,14 @@ public class ValueDataType implements DataType {
         if (aNull || bNull) {
             return SortOrder.compareNull(aNull, sortType);
         }
-        int comp = compareTypeSave(a, b);
+        // CompareMode compareMode=this.compareMode;
+        // if(compareMode==null)
+        //    compareMode=CompareMode.getInstance(null, 0);
+        int comp = a.compareTypeSafe(b, compareMode);
         if ((sortType & SortOrder.DESCENDING) != 0) {
             comp = -comp;
         }
         return comp;
-    }
-
-    private int compareTypeSave(Value a, Value b) {
-        if (a == b) {
-            return 0;
-        }
-        return a.compareTypeSave(b, compareMode);
     }
 
     @Override
@@ -206,6 +207,7 @@ public class ValueDataType implements DataType {
         case Value.SHORT:
             buff.put((byte) type).putShort(v.getShort());
             break;
+        case Value.ENUM:
         case Value.INT: {
             int x = v.getInt();
             if (x < 0) {
@@ -282,6 +284,19 @@ public class ValueDataType implements DataType {
                 putVarLong(dateValue).
                 putVarLong(millis).
                 putVarLong(nanos);
+            break;
+        }
+        case Value.TIMESTAMP_TZ: {
+            ValueTimestampTimeZone ts = (ValueTimestampTimeZone) v;
+            long dateValue = ts.getDateValue();
+            long nanos = ts.getTimeNanos();
+            long millis = nanos / 1000000;
+            nanos -= millis * 1000000;
+            buff.put((byte) type).
+                putVarLong(dateValue).
+                putVarLong(millis).
+                putVarLong(nanos).
+                putVarInt(ts.getTimeZoneOffsetMins());
             break;
         }
         case Value.JAVA_OBJECT: {
@@ -422,6 +437,14 @@ public class ValueDataType implements DataType {
             break;
         }
         default:
+            if (JdbcUtils.customDataTypesHandler != null) {
+                byte[] b = v.getBytesNoCopy();
+                buff.put((byte)CUSTOM_DATA_TYPE).
+                    putVarInt(type).
+                    putVarInt(b.length).
+                    put(b);
+                break;
+            }
             DbException.throwInternalError("type=" + v.getType());
         }
     }
@@ -488,6 +511,12 @@ public class ValueDataType implements DataType {
             long dateValue = readVarLong(buff);
             long nanos = readVarLong(buff) * 1000000 + readVarLong(buff);
             return ValueTimestamp.fromDateValueAndNanos(dateValue, nanos);
+        }
+        case Value.TIMESTAMP_TZ: {
+            long dateValue = readVarLong(buff);
+            long nanos = readVarLong(buff) * 1000000 + readVarLong(buff);
+            short tz = (short) readVarInt(buff);
+            return ValueTimestampTimeZone.fromDateValueAndNanos(dateValue, nanos, tz);
         }
         case Value.BYTES: {
             int len = readVarInt(buff);
@@ -580,6 +609,18 @@ public class ValueDataType implements DataType {
         }
         case SPATIAL_KEY_2D:
             return getSpatialDataType().read(buff);
+        case CUSTOM_DATA_TYPE: {
+            if (JdbcUtils.customDataTypesHandler != null) {
+                int customType = readVarInt(buff);
+                int len = readVarInt(buff);
+                byte[] b = DataUtils.newBytes(len);
+                buff.get(b, 0, len);
+                return JdbcUtils.customDataTypesHandler.convert(
+                        ValueBytes.getNoCopy(b), customType);
+            }
+            throw DbException.get(ErrorCode.UNKNOWN_DATA_TYPE_1,
+                    "No CustomDataTypesHandler has been set up");
+        }
         default:
             if (type >= INT_0_15 && type < INT_0_15 + 16) {
                 return ValueInt.get(type - INT_0_15);

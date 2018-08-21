@@ -11,10 +11,9 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-
+import java.util.concurrent.TimeUnit;
 import org.h2.api.DatabaseEventListener;
 import org.h2.api.ErrorCode;
-import org.h2.command.ddl.Analyze;
 import org.h2.command.ddl.CreateTableData;
 import org.h2.constraint.Constraint;
 import org.h2.constraint.ConstraintReferential;
@@ -38,6 +37,7 @@ import org.h2.table.Column;
 import org.h2.table.IndexColumn;
 import org.h2.table.Table;
 import org.h2.table.TableBase;
+import org.h2.table.TableType;
 import org.h2.util.DebuggingThreadLocal;
 import org.h2.util.MathUtils;
 import org.h2.util.New;
@@ -49,6 +49,33 @@ import org.h2.value.Value;
  */
 public class MVTable extends TableBase {
 
+    /**
+     * The table name this thread is waiting to lock.
+     */
+    public static final DebuggingThreadLocal<String> WAITING_FOR_LOCK;
+
+    /**
+     * The table names this thread has exclusively locked.
+     */
+    public static final DebuggingThreadLocal<ArrayList<String>> EXCLUSIVE_LOCKS;
+
+    /**
+     * The tables names this thread has a shared lock on.
+     */
+    public static final DebuggingThreadLocal<ArrayList<String>> SHARED_LOCKS;
+
+    static {
+        if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+            WAITING_FOR_LOCK = new DebuggingThreadLocal<String>();
+            EXCLUSIVE_LOCKS = new DebuggingThreadLocal<ArrayList<String>>();
+            SHARED_LOCKS = new DebuggingThreadLocal<ArrayList<String>>();
+        } else {
+            WAITING_FOR_LOCK = null;
+            EXCLUSIVE_LOCKS = null;
+            SHARED_LOCKS = null;
+        }
+    }
+
     private MVPrimaryIndex primaryIndex;
     private final ArrayList<Index> indexes = New.arrayList();
     private long lastModificationId;
@@ -57,10 +84,6 @@ public class MVTable extends TableBase {
     // using a ConcurrentHashMap as a set
     private final ConcurrentHashMap<Session, Session> lockSharedSessions =
             new ConcurrentHashMap<Session, Session>();
-
-    public static final DebuggingThreadLocal<String> WAITING_FOR_LOCK = new DebuggingThreadLocal<String>();
-    public static final DebuggingThreadLocal<ArrayList<String>> EXCLUSIVE_LOCKS = new DebuggingThreadLocal<ArrayList<String>>();
-    public static final DebuggingThreadLocal<ArrayList<String>> SHARED_LOCKS = new DebuggingThreadLocal<ArrayList<String>>();
 
     /**
      * The queue of sessions waiting to lock the table. It is a FIFO queue to
@@ -136,13 +159,17 @@ public class MVTable extends TableBase {
                 return true;
             }
             session.setWaitForLock(this, Thread.currentThread());
-            WAITING_FOR_LOCK.set(getName());
+            if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                WAITING_FOR_LOCK.set(getName());
+            }
             waitingSessions.addLast(session);
             try {
                 doLock1(session, lockMode, exclusive);
             } finally {
                 session.setWaitForLock(null, null);
-                WAITING_FOR_LOCK.remove();
+                if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                    WAITING_FOR_LOCK.remove();
+                }
                 waitingSessions.remove(session);
             }
         }
@@ -186,10 +213,10 @@ public class MVTable extends TableBase {
                 // check for deadlocks from now on
                 checkDeadlock = true;
             }
-            long now = System.currentTimeMillis();
+            long now = System.nanoTime();
             if (max == 0) {
                 // try at least one more time
-                max = now + session.getLockTimeout();
+                max = now + TimeUnit.MILLISECONDS.toNanos(session.getLockTimeout());
             } else if (now >= max) {
                 traceLock(session, exclusive,
                         "timeout after " + session.getLockTimeout());
@@ -208,7 +235,8 @@ public class MVTable extends TableBase {
                     }
                 }
                 // don't wait too long so that deadlocks are detected early
-                long sleep = Math.min(Constants.DEADLOCK_CHECK, max - now);
+                long sleep = Math.min(Constants.DEADLOCK_CHECK,
+                        TimeUnit.NANOSECONDS.toMillis(max - now));
                 if (sleep == 0) {
                     sleep = 1;
                 }
@@ -226,19 +254,23 @@ public class MVTable extends TableBase {
                     traceLock(session, exclusive, "added for");
                     session.addLock(this);
                     lockExclusiveSession = session;
-                    if (EXCLUSIVE_LOCKS.get() == null) {
-                      EXCLUSIVE_LOCKS.set(new ArrayList<String>());
+                    if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                        if (EXCLUSIVE_LOCKS.get() == null) {
+                            EXCLUSIVE_LOCKS.set(new ArrayList<String>());
+                        }
+                        EXCLUSIVE_LOCKS.get().add(getName());
                     }
-                    EXCLUSIVE_LOCKS.get().add(getName());
                     return true;
                 } else if (lockSharedSessions.size() == 1 &&
                         lockSharedSessions.containsKey(session)) {
                     traceLock(session, exclusive, "add (upgraded) for ");
                     lockExclusiveSession = session;
-                    if (EXCLUSIVE_LOCKS.get() == null) {
-                      EXCLUSIVE_LOCKS.set(new ArrayList<String>());
+                    if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                        if (EXCLUSIVE_LOCKS.get() == null) {
+                            EXCLUSIVE_LOCKS.set(new ArrayList<String>());
+                        }
+                        EXCLUSIVE_LOCKS.get().add(getName());
                     }
-                    EXCLUSIVE_LOCKS.get().add(getName());
                     return true;
                 }
             }
@@ -260,10 +292,12 @@ public class MVTable extends TableBase {
                     traceLock(session, exclusive, "ok");
                     session.addLock(this);
                     lockSharedSessions.put(session, session);
-                    if (SHARED_LOCKS.get() == null) {
-                    	SHARED_LOCKS.set(new ArrayList<String>());
+                    if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                        if (SHARED_LOCKS.get() == null) {
+                            SHARED_LOCKS.set(new ArrayList<String>());
+                        }
+                        SHARED_LOCKS.get().add(getName());
                     }
-                    SHARED_LOCKS.get().add(getName());
                 }
                 return true;
             }
@@ -377,15 +411,19 @@ public class MVTable extends TableBase {
             traceLock(s, lockExclusiveSession == s, "unlock");
             if (lockExclusiveSession == s) {
                 lockExclusiveSession = null;
-                if (EXCLUSIVE_LOCKS.get() != null) {
-                  EXCLUSIVE_LOCKS.get().remove(getName());
+                if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                    if (EXCLUSIVE_LOCKS.get() != null) {
+                        EXCLUSIVE_LOCKS.get().remove(getName());
+                    }
                 }
             }
             synchronized (getLockSyncObject()) {
                 if (lockSharedSessions.size() > 0) {
                     lockSharedSessions.remove(s);
-                    if (SHARED_LOCKS.get() != null) {
-                    	SHARED_LOCKS.get().remove(getName());
+                    if (SysProperties.THREAD_DEADLOCK_DETECTOR) {
+                        if (SHARED_LOCKS.get() != null) {
+                            SHARED_LOCKS.get().remove(getName());
+                        }
                     }
                 }
                 if (!waitingSessions.isEmpty()) {
@@ -453,7 +491,7 @@ public class MVTable extends TableBase {
                 mainIndexColumn = -1;
             }
         } else if (primaryIndex.getRowCountMax() != 0) {
-            mainIndexColumn = -1;
+            mainIndexColumn = -1;mainIndexColumn = -1; //重复了
         }
         if (mainIndexColumn != -1) {
             primaryIndex.setMainIndexColumn(mainIndexColumn);
@@ -466,6 +504,8 @@ public class MVTable extends TableBase {
             index = new MVSecondaryIndex(session.getDatabase(), this, indexId,
                     indexName, cols, indexType);
         }
+        //从MVPrimaryIndex中取记录，如果行数不多，直接读到buffer中，然后再写入index中，
+        //或者，当行数很多时，在MVStore中建立多个临时map，然后再从这些临时map中读出来写到index
         if (index.needRebuild()) {
             rebuildIndex(session, index, indexName);
         }
@@ -697,8 +737,7 @@ public class MVTable extends TableBase {
         if (n > 0) {
             nextAnalyze = n;
         }
-        int rows = session.getDatabase().getSettings().analyzeSample / 10;
-        Analyze.analyzeTable(session, this, rows, false);
+        session.markTableForAnalyze(this);
     }
 
     @Override
@@ -707,8 +746,8 @@ public class MVTable extends TableBase {
     }
 
     @Override
-    public String getTableType() {
-        return Table.TABLE;
+    public TableType getTableType() {
+        return TableType.TABLE;
     }
 
     @Override
@@ -849,6 +888,12 @@ public class MVTable extends TableBase {
         }
     }
 
+    /**
+     * Convert the illegal state exception to a database exception.
+     *
+     * @param e the illegal state exception
+     * @return the database exception
+     */
     DbException convertException(IllegalStateException e) {
         if (DataUtils.getErrorCode(e.getMessage()) ==
                 DataUtils.ERROR_TRANSACTION_LOCKED) {

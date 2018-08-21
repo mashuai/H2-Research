@@ -76,11 +76,25 @@ public class WebServer implements Service {
     private static final String[] GENERIC = {
         "Generic JNDI Data Source|javax.naming.InitialContext|" +
                 "java:comp/env/jdbc/Test|sa",
+        "Generic Teradata|com.teradata.jdbc.TeraDriver|" +
+                "jdbc:teradata://whomooz/|",
+        "Generic Snowflake|com.snowflake.client.jdbc.SnowflakeDriver|" +
+                "jdbc:snowflake://accountName.snowflakecomputing.com|",
+        "Generic Redshift|com.amazon.redshift.jdbc42.Driver|" +
+                "jdbc:redshift://endpoint:5439/database|",
+        "Generic Impala|org.cloudera.impala.jdbc41.Driver|" +
+                "jdbc:impala://clustername:21050/default|",
+        "Generic Hive 2|org.apache.hive.jdbc.HiveDriver|" +
+                "jdbc:hive2://clustername:10000/default|",
+        "Generic Hive|org.apache.hadoop.hive.jdbc.HiveDriver|" +
+                "jdbc:hive://clustername:10000/default|",
+        "Generic Azure SQL|com.microsoft.sqlserver.jdbc.SQLServerDriver|" +
+                "jdbc:sqlserver://name.database.windows.net:1433|",
         "Generic Firebird Server|org.firebirdsql.jdbc.FBDriver|" +
                 "jdbc:firebirdsql:localhost:c:/temp/firebird/test|sysdba",
         "Generic SQLite|org.sqlite.JDBC|" +
                 "jdbc:sqlite:test|sa",
-        "Generic DB2|COM.ibm.db2.jdbc.net.DB2Driver|" +
+        "Generic DB2|com.ibm.db2.jcc.DB2Driver|" +
                 "jdbc:db2://localhost/test|" ,
         "Generic Oracle|oracle.jdbc.driver.OracleDriver|" +
                     "jdbc:oracle:thin:@localhost:1521:XE|sa" ,

@@ -18,7 +18,6 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
 import org.h2.engine.SessionInterface;
@@ -388,6 +387,13 @@ public class Transfer {
             }
             break;
         }
+        case Value.TIMESTAMP_TZ: {
+            ValueTimestampTimeZone ts = (ValueTimestampTimeZone) v;
+            writeLong(ts.getDateValue());
+            writeLong(ts.getTimeNanos());
+            writeInt(ts.getTimeZoneOffsetMins());
+            break;
+        }
         case Value.DECIMAL:
             writeString(v.getString());
             break;
@@ -462,6 +468,10 @@ public class Transfer {
                 throw DbException.get(
                         ErrorCode.CONNECTION_BROKEN_1, "length=" + length);
             }
+            if (length > Integer.MAX_VALUE) {
+                throw DbException.get(
+                        ErrorCode.CONNECTION_BROKEN_1, "length="+ length);
+            }
             writeLong(length);
             Reader reader = v.getReader();
             Data.copyString(reader, out);
@@ -482,6 +492,11 @@ public class Transfer {
             for (Value value : list) {
                 writeValue(value);
             }
+            break;
+        }
+        case Value.ENUM: {
+            writeInt(v.getInt());
+            writeString(v.getString());
             break;
         }
         case Value.RESULT_SET: {
@@ -520,6 +535,10 @@ public class Transfer {
             }
             break;
         default:
+            if (JdbcUtils.customDataTypesHandler != null) {
+                writeBytes(v.getBytesNoCopy());
+                break;
+            }
             throw DbException.get(ErrorCode.CONNECTION_BROKEN_1, "type=" + type);
         }
     }
@@ -531,7 +550,7 @@ public class Transfer {
      */
     public Value readValue() throws IOException {
         int type = readInt();
-        switch(type) {
+        switch (type) {
         case Value.NULL:
             return ValueNull.INSTANCE;
         case Value.BYTES:
@@ -570,12 +589,21 @@ public class Transfer {
             return ValueTimestamp.fromMillisNanos(readLong(),
                     readInt() % 1000000);
         }
+        case Value.TIMESTAMP_TZ: {
+            return ValueTimestampTimeZone.fromDateValueAndNanos(readLong(),
+                    readLong(), (short) readInt());
+        }
         case Value.DECIMAL:
             return ValueDecimal.get(new BigDecimal(readString()));
         case Value.DOUBLE:
             return ValueDouble.get(readDouble());
         case Value.FLOAT:
             return ValueFloat.get(readFloat());
+        case Value.ENUM: {
+            final int ordinal = readInt();
+            final String label = readString();
+            return ValueEnumBase.get(label, ordinal);
+        }
         case Value.INT:
             return ValueInt.get(readInt());
         case Value.LONG:
@@ -587,11 +615,13 @@ public class Transfer {
         case Value.STRING_IGNORECASE:
             return ValueStringIgnoreCase.get(readString());
         case Value.STRING_FIXED:
-            return ValueStringFixed.get(readString());
+            return ValueStringFixed.get(readString(), ValueStringFixed.PRECISION_DO_NOT_TRIM, null);
         case Value.BLOB: {
             long length = readLong();
             if (version >= Constants.TCP_PROTOCOL_VERSION_11) {
                 if (length == -1) {
+                    //从服务器端返回lob数据时走这个代码分支，
+                    //注意，这里还没开始传lob字节流，等到客户端发LOB_READ指令时才开始传
                     int tableId = readInt();
                     long id = readLong();
                     byte[] hmac;
@@ -604,15 +634,6 @@ public class Transfer {
                     return ValueLobDb.create(
                             Value.BLOB, session.getDataHandler(), tableId, id, hmac, precision);
                 }
-                int len = (int) length;
-                byte[] small = new byte[len];
-                IOUtils.readFully(in, small, len);
-                int magic = readInt();
-                if (magic != LOB_MAGIC) {
-                    throw DbException.get(
-                            ErrorCode.CONNECTION_BROKEN_1, "magic=" + magic);
-                }
-                return ValueLobDb.createSmallLob(Value.BLOB, small, length);
             }
             Value v = session.getDataHandler().getLobStorage().createBlob(in, length);
             int magic = readInt();
@@ -637,6 +658,10 @@ public class Transfer {
                     long precision = readLong();
                     return ValueLobDb.create(
                             Value.CLOB, session.getDataHandler(), tableId, id, hmac, precision);
+                }
+                if (length < 0 || length > Integer.MAX_VALUE) {
+                    throw DbException.get(
+                            ErrorCode.CONNECTION_BROKEN_1, "length="+ length);
                 }
                 DataReader reader = new DataReader(in);
                 int len = (int) length;
@@ -697,6 +722,10 @@ public class Transfer {
             }
             return ValueGeometry.get(readString());
         default:
+            if (JdbcUtils.customDataTypesHandler != null) {
+                return JdbcUtils.customDataTypesHandler.convert(
+                        ValueBytes.getNoCopy(readBytes()), type);
+            }
             throw DbException.get(ErrorCode.CONNECTION_BROKEN_1, "type=" + type);
         }
     }

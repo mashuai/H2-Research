@@ -6,7 +6,6 @@
 package org.h2.expression;
 
 import java.util.ArrayList;
-
 import org.h2.api.ErrorCode;
 import org.h2.command.dml.Query;
 import org.h2.engine.Session;
@@ -50,17 +49,11 @@ public class Subquery extends Expression {
     public Value getValue(Session session) {
         query.setSession(session);
         //getValue虽然在主查询有多条记录的情况下都会被调用，但是query内部是有缓存的，只是一个浅拷贝，所以对性能影响不大
-        ResultInterface result = query.query(2);
-        try {
-            int rowcount = result.getRowCount();
-            if (rowcount > 1) {
-                throw DbException.get(ErrorCode.SCALAR_SUBQUERY_CONTAINS_MORE_THAN_ONE_ROW);
-            }
+        try (ResultInterface result = query.query(2)) {
             Value v;
-            if (rowcount <= 0) {
+            if (!result.next()) {
                 v = ValueNull.INSTANCE;
             } else {
-                result.next();
                 Value[] values = result.currentRow();
                 if (result.getVisibleColumnCount() == 1) {
                     v = values[0];
@@ -71,13 +64,19 @@ public class Subquery extends Expression {
                 	//所以如果子查询只需要一个列时，就不应该多写一个列，这样性能更高。
                     v = ValueArray.get(values);
                 }
+                if (result.hasNext()) {
+                    throw DbException.get(ErrorCode.SCALAR_SUBQUERY_CONTAINS_MORE_THAN_ONE_ROW);
+                }
             }
             return v;
-        } finally {
-            //对于org.h2.result.LocalResult只有external不为null时才把closed设为true
-        	//当在org.h2.command.dml.Query.query(int)判断org.h2.result.LocalResult.isClosed()时因为closed为false
-        	//所以这个close方法并没效果。
-            result.close();
+//<<<<<<< HEAD
+//        } finally {
+//            //对于org.h2.result.LocalResult只有external不为null时才把closed设为true
+//        	//当在org.h2.command.dml.Query.query(int)判断org.h2.result.LocalResult.isClosed()时因为closed为false
+//        	//所以这个close方法并没效果。
+//            result.close();
+//=======
+//>>>>>>> 237dda4106a721c6ba606bbc066b67f48e80efbd
         }
     }
 
@@ -93,7 +92,7 @@ public class Subquery extends Expression {
 
     @Override
     public Expression optimize(Session session) {
-        query.prepare();
+        session.optimizeQueryExpression(query);
         return this;
     }
 

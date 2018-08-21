@@ -7,13 +7,14 @@ package org.h2.command.ddl;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-
+import java.util.Iterator;
 import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.command.Parser;
 import org.h2.command.Prepared;
 import org.h2.constraint.Constraint;
 import org.h2.constraint.ConstraintReferential;
+import org.h2.engine.Constants;
 import org.h2.engine.Database;
 import org.h2.engine.DbObject;
 import org.h2.engine.Right;
@@ -43,13 +44,15 @@ import org.h2.util.New;
  * ALTER TABLE ALTER COLUMN SET DEFAULT,
  * ALTER TABLE ALTER COLUMN SET NOT NULL,
  * ALTER TABLE ALTER COLUMN SET NULL,
+ * ALTER TABLE ALTER COLUMN SET VISIBLE,
+ * ALTER TABLE ALTER COLUMN SET INVISIBLE,
  * ALTER TABLE DROP COLUMN
  */
 //一次只能修改一个表
 //只有执行alter命令时会产生此类的实例，而AlterTableAddConstraint实例在alter和create table命令中都会产生
 public class AlterTableAlterColumn extends SchemaCommand {
 
-    private Table table;
+    private String tableName;
     private Column oldColumn;
     private Column newColumn;
     private int type;
@@ -57,15 +60,22 @@ public class AlterTableAlterColumn extends SchemaCommand {
     private Expression newSelectivity;
     private String addBefore;
     private String addAfter;
+    private boolean ifTableExists;
     private boolean ifNotExists;
     private ArrayList<Column> columnsToAdd;
+    private ArrayList<Column> columnsToRemove;
+    private boolean newVisibility;
 
     public AlterTableAlterColumn(Session session, Schema schema) {
         super(session, schema);
     }
 
-    public void setTable(Table table) {
-        this.table = table;
+    public void setIfTableExists(boolean b) {
+        ifTableExists = b;
+    }
+
+    public void setTableName(String tableName) {
+        this.tableName = tableName;
     }
 
     public void setOldColumn(Column oldColumn) {
@@ -84,16 +94,24 @@ public class AlterTableAlterColumn extends SchemaCommand {
     public int update() {
         session.commit(true);
         Database db = session.getDatabase();
+        Table table = getSchema().resolveTableOrView(session, tableName);
+        if (table == null) {
+            if (ifTableExists) {
+                return 0;
+            }
+            throw DbException.get(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, tableName);
+        }
         session.getUser().checkRight(table, Right.ALL);
         table.checkSupportAlter(); //只有MVTable和RegularTable支持
         table.lock(session, true, true);
-        Sequence sequence = oldColumn == null ? null : oldColumn.getSequence();
         if (newColumn != null) {
-            checkDefaultReferencesTable(newColumn.getDefaultExpression());
+            checkDefaultReferencesTable(table, newColumn.getDefaultExpression());
+            checkClustering(newColumn);
         }
         if (columnsToAdd != null) {
             for (Column column : columnsToAdd) {
-                checkDefaultReferencesTable(column.getDefaultExpression());
+                checkDefaultReferencesTable(table, column.getDefaultExpression());
+                checkClustering(column);
             }
         }
         //分7种操作: 把列设为NOT NULL、把列设为NULL、把列设为默认值、改变列类型、增加列、删除列、更改列的选择因子SELECTIVITY
@@ -104,7 +122,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
                 // no change
                 break;
             }
-            checkNoNullValues(); //如果要修改的列有NULL值，那么不允许把列修改为NOT NULL
+            checkNoNullValues(table); //如果要修改的列有NULL值，那么不允许把列修改为NOT NULL
             oldColumn.setNullable(false);
             db.updateMeta(session, table);
             break;
@@ -114,16 +132,19 @@ public class AlterTableAlterColumn extends SchemaCommand {
                 // no change
                 break;
             }
-            checkNullable(); //如果要修改的列是主键索引或hash索引的列，那么不允许把列修改为NULL
+            checkNullable(table); //如果要修改的列是主键索引或hash索引的列，那么不允许把列修改为NULL
             oldColumn.setNullable(true);
             db.updateMeta(session, table);
             break;
         }
         case CommandInterface.ALTER_TABLE_ALTER_COLUMN_DEFAULT: {
-            checkDefaultReferencesTable(defaultExpression);
+            //这个oldColumn == null判断是多余的，如果为null了，下面的oldColumn.setSequence就没意义了，
+            //在Parser里也会设置oldColumn的
+            Sequence sequence = oldColumn == null ? null : oldColumn.getSequence();
+            checkDefaultReferencesTable(table, defaultExpression);
             oldColumn.setSequence(null);
             oldColumn.setDefaultExpression(session, defaultExpression);
-            removeSequence(sequence);
+            removeSequence(table, sequence);
             db.updateMeta(session, table);
             break;
         }
@@ -132,7 +153,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
             // need to copy the table because the length is only a constraint,
             // and does not affect the storage structure.
             if (oldColumn.isWideningConversion(newColumn)) {
-                convertAutoIncrementColumn(newColumn);
+                convertAutoIncrementColumn(table, newColumn);
                 oldColumn.copy(newColumn);
                 db.updateMeta(session, table);
             } else {
@@ -140,13 +161,17 @@ public class AlterTableAlterColumn extends SchemaCommand {
                 oldColumn.setDefaultExpression(session, null);
                 oldColumn.setConvertNullToDefault(false);
                 if (oldColumn.isNullable() && !newColumn.isNullable()) {
-                    checkNoNullValues();
+                    checkNoNullValues(table);
                 } else if (!oldColumn.isNullable() && newColumn.isNullable()) {
-                    checkNullable();
+                    checkNullable(table);
                 }
-                convertAutoIncrementColumn(newColumn);
-                copyData();
+                if (oldColumn.getVisible() ^ newColumn.getVisible()) {
+                    oldColumn.setVisible(newColumn.getVisible());
+                }
+                convertAutoIncrementColumn(table, newColumn);
+                copyData(table);
             }
+            table.setModified();
             break;
         }
         case CommandInterface.ALTER_TABLE_ADD_COLUMN: {
@@ -162,20 +187,27 @@ public class AlterTableAlterColumn extends SchemaCommand {
                             table.isTemporary());
                 }
             }
-            copyData();
+            copyData(table);
             break;
         }
         case CommandInterface.ALTER_TABLE_DROP_COLUMN: {
-            if (table.getColumns().length == 1) { //不能删除最后一列
-                throw DbException.get(ErrorCode.CANNOT_DROP_LAST_COLUMN, oldColumn.getSQL());
+            if (table.getColumns().length - columnsToRemove.size() < 1) { //不能删除最后一列
+                throw DbException.get(ErrorCode.CANNOT_DROP_LAST_COLUMN,
+                        columnsToRemove.get(0).getSQL());
             }
-            table.dropSingleColumnConstraintsAndIndexes(session, oldColumn);
-            copyData();
+            table.dropMultipleColumnsConstraintsAndIndexes(session, columnsToRemove);
+            copyData(table);
             break;
         }
         case CommandInterface.ALTER_TABLE_ALTER_COLUMN_SELECTIVITY: {
             int value = newSelectivity.optimize(session).getValue(session).getInt();
             oldColumn.setSelectivity(value);
+            db.updateMeta(session, table);
+            break;
+        }
+        case CommandInterface.ALTER_TABLE_ALTER_COLUMN_VISIBILITY: {
+            oldColumn.setVisible(newVisibility);
+            table.setModified();
             db.updateMeta(session, table);
             break;
         }
@@ -185,7 +217,11 @@ public class AlterTableAlterColumn extends SchemaCommand {
         return 0;
     }
 
-    private void checkDefaultReferencesTable(Expression defaultExpression) {
+    //ALTER TABLE mytable ADD (f3 int, f4 int default f2*2)在parse阶段就报错了
+    //在org.h2.table.Column.setDefaultExpression(Session, Expression)时找不到列
+    //用ALTER TABLE mytable ADD (f3 int, f4 int default EXISTS(select f1 from mytable where f1=1))
+    //就可以测试下面的COLUMN_IS_REFERENCED_1
+    private static void checkDefaultReferencesTable(Table table, Expression defaultExpression) {
         if (defaultExpression == null) {
             return;
         }
@@ -199,7 +235,16 @@ public class AlterTableAlterColumn extends SchemaCommand {
         }
     }
 
-    private void convertAutoIncrementColumn(Column c) {
+    private void checkClustering(Column c) {
+        if (!Constants.CLUSTERING_DISABLED
+                .equals(session.getDatabase().getCluster())
+                && c.isAutoIncrement()) {
+            throw DbException.getUnsupportedException(
+                    "CLUSTERING && auto-increment columns");
+        }
+    }
+
+    private void convertAutoIncrementColumn(Table table, Column c) {
         if (c.isAutoIncrement()) {
             if (c.isPrimaryKey()) {
                 c.setOriginalSQL("IDENTITY");
@@ -210,7 +255,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
         }
     }
 
-    private void removeSequence(Sequence sequence) {
+    private void removeSequence(Table table, Sequence sequence) {
         if (sequence != null) {
             table.removeSequence(sequence);
             sequence.setBelongsToTable(false);
@@ -219,16 +264,17 @@ public class AlterTableAlterColumn extends SchemaCommand {
         }
     }
 
-    private void copyData() {
+    private void copyData(Table table) {
         if (table.isTemporary()) {
             throw DbException.getUnsupportedException("TEMP TABLE");
         }
         Database db = session.getDatabase();
         String baseName = table.getName();
         String tempName = db.getTempTableName(baseName, session);
+        //这两个变量可以放到cloneTableStructure中声明
         Column[] columns = table.getColumns();
         ArrayList<Column> newColumns = New.arrayList();
-        Table newTable = cloneTableStructure(columns, db, tempName, newColumns);
+        Table newTable = cloneTableStructure(table, columns, db, tempName, newColumns);
         try {
             // check if a view would become invalid
             // (because the column to drop is referenced or so)
@@ -280,14 +326,27 @@ public class AlterTableAlterColumn extends SchemaCommand {
 
     //columns是原先表的列，newColumns放新列，一开始为空list
     //不仅仅是拷贝表结构，还会适当增删改列，然后拷贝数据(用create ... as select ...的方式)
-    private Table cloneTableStructure(Column[] columns, Database db, String tempName, ArrayList<Column> newColumns) {
-        for (Column col : columns) { //刚好ColumnId就是从0开始的
+    private Table cloneTableStructure(Table table, Column[] columns, Database db,
+            String tempName, ArrayList<Column> newColumns) {
+        for (Column col : columns) {
             newColumns.add(col.getClone());
         }
         //调整位置
         if (type == CommandInterface.ALTER_TABLE_DROP_COLUMN) {
-            int position = oldColumn.getColumnId();
-            newColumns.remove(position);
+            for (Column removeCol : columnsToRemove) {
+                Column foundCol = null;
+                for (Iterator<Column> it = newColumns.iterator(); it.hasNext();) {
+                    Column newCol = it.next();
+                    if (newCol.getName() == removeCol.getName()) {
+                        foundCol = newCol;
+                        break;
+                    }
+                }
+                if (foundCol == null) {
+                    throw DbException.throwInternalError(removeCol.getCreateSQL());
+                }
+                newColumns.remove(foundCol);
+            }
         } else if (type == CommandInterface.ALTER_TABLE_ADD_COLUMN) {
             int position;
             if (addBefore != null) {
@@ -322,7 +381,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
         data.isHidden = table.isHidden();
         data.create = true;
         data.session = session;
-        Table newTable = getSchema().createTable(data);
+        Table newTable = getSchema().createTable(data); //作者在这里创建表我想他只是为了调用getCreateSQL
         newTable.setComment(table.getComment());
         StringBuilder buff = new StringBuilder();
         buff.append(newTable.getCreateSQL());
@@ -341,7 +400,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
             }
         }
         buff.append(" AS SELECT ");
-        if (columnList.length() == 0) {
+        if (columnList.length() == 0) { //根据上面的代码判断，columnList的长度总是大于0的
             // special case: insert into test select * from
             buff.append('*');
         } else {
@@ -374,14 +433,16 @@ public class AlterTableAlterColumn extends SchemaCommand {
             }
             if (child instanceof TableView) {
                 continue;
-            } else if (child.getType() == DbObject.TABLE_OR_VIEW) { //前面的if已排除TableView，所以不可以出现Talbe的子对象是Table
+            //前面的if已排除TableView，所以不可以出现Table的子对象是Table
+            } else if (child.getType() == DbObject.TABLE_OR_VIEW) {
                 DbException.throwInternalError();
             }
             String quotedName = Parser.quoteIdentifier(tempName + "_" + child.getName());
             String sql = null;
             if (child instanceof ConstraintReferential) {
                 ConstraintReferential r = (ConstraintReferential) child;
-                //定义约束的表有可能不等于当前talbe吗? 因为已知ConstraintReferential是table的子对象了？
+                //定义约束的表有可能不等于当前table吗? 因为已知ConstraintReferential是table的子对象了？
+                //有可能啊，在AlterTableAddConstraint里头，ConstraintReferential就被加到主表和引用表中
                 if (r.getTable() != table) {
                     sql = r.getCreateSQLForCopy(r.getTable(), newTable, quotedName, false);
                 }
@@ -403,8 +464,10 @@ public class AlterTableAlterColumn extends SchemaCommand {
         for (Column col : newColumns) {
             Sequence seq = col.getSequence();
             if (seq != null) {
+                //这里可能有潜在的问题，如果接下来检查view失败了，那么table中就少一个Sequence了，
+                //但是目前没有引发问题
                 table.removeSequence(seq);
-                col.setSequence(null);
+                col.setSequence(null); //因为newColumns中的列是通过Clone得来，所以就算之后检查view失败了也不会影响原来的列
             }
         }
         for (String sql : triggers) {
@@ -455,6 +518,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
         }
     }
 
+    //目前调用此方法的地方ddl参数都是true
     private void execute(String sql, boolean ddl) {
         Prepared command = session.prepare(sql);
         command.update();
@@ -463,7 +527,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
         }
     }
 
-    private void checkNullable() {
+    private void checkNullable(Table table) {
         for (Index index : table.getIndexes()) {
             if (index.getColumnIndex(oldColumn) < 0) {
                 continue;
@@ -476,7 +540,7 @@ public class AlterTableAlterColumn extends SchemaCommand {
         }
     }
 
-    private void checkNoNullValues() {
+    private void checkNoNullValues(Table table) {
         String sql = "SELECT COUNT(*) FROM " +
                 table.getSQL() + " WHERE " +
                 oldColumn.getSQL() + " IS NULL";
@@ -517,5 +581,13 @@ public class AlterTableAlterColumn extends SchemaCommand {
 
     public void setNewColumns(ArrayList<Column> columnsToAdd) {
         this.columnsToAdd = columnsToAdd;
+    }
+
+    public void setColumnsToRemove(ArrayList<Column> columnsToRemove) {
+        this.columnsToRemove = columnsToRemove;
+    }
+
+    public void setVisible(boolean visible) {
+        this.newVisibility = visible;
     }
 }

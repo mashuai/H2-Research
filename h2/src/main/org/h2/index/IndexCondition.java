@@ -19,7 +19,7 @@ import org.h2.expression.ExpressionVisitor;
 import org.h2.message.DbException;
 import org.h2.result.ResultInterface;
 import org.h2.table.Column;
-import org.h2.table.Table;
+import org.h2.table.TableType;
 import org.h2.util.StatementBuilder;
 import org.h2.value.CompareMode;
 import org.h2.value.Value;
@@ -248,7 +248,7 @@ public class IndexCondition {
         case Comparison.IN_LIST:
         case Comparison.IN_QUERY:
             if (indexConditions.size() > 1) {
-                if (!Table.TABLE.equals(column.getTable().getTableType())) {
+                if (TableType.TABLE != column.getTable().getTableType()) {
                     // if combined with other conditions,
                     // IN(..) can only be used for regular tables
                     // test case:
@@ -349,6 +349,33 @@ public class IndexCondition {
      */
     public Column getColumn() {
         return column;
+    }
+
+    /**
+     * Get expression.
+     *
+     * @return Expression.
+     */
+    public Expression getExpression() {
+        return expression;
+    }
+
+    /**
+     * Get expression list.
+     *
+     * @return Expression list.
+     */
+    public List<Expression> getExpressionList() {
+        return expressionList;
+    }
+
+    /**
+     * Get expression query.
+     *
+     * @return Expression query.
+     */
+    public Query getExpressionQuery() {
+        return expressionQuery;
     }
 
     /**

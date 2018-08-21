@@ -12,8 +12,9 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.HashMap;
-import java.util.TreeMap;
 import java.util.Map.Entry;
+import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 
 import org.h2.build.code.SwitchSource;
 import org.h2.build.doc.XMLParser;
@@ -37,6 +38,7 @@ public class Build extends BuildBase {
     /**
      * Run the benchmarks.
      */
+    @Description(summary = "Run the benchmarks.")
     public void benchmark() {
         downloadUsingMaven("ext/hsqldb-2.3.2.jar",
                 "org/hsqldb", "hsqldb", "2.3.2",
@@ -50,9 +52,9 @@ public class Build extends BuildBase {
         downloadUsingMaven("ext/derbynet-10.10.1.1.jar",
                 "org/apache/derby", "derbynet", "10.10.1.1",
                 "912b08dca73663d4665e09cd317be1218412d93e");
-        downloadUsingMaven("ext/postgresql-8.3-603.jdbc3.jar",
-                "postgresql", "postgresql", "8.3-603.jdbc3",
-                "33d531c3c53055ddcbea3d88bfa093466ffef924");
+        downloadUsingMaven("ext/postgresql-9.4.1209.jre6.jar",
+                "org.postgresql", "postgresql", "9.4.1209.jre6",
+                "2ed7a5a8c952d9ea18af92efea7e56ef854abfea");
         downloadUsingMaven("ext/mysql-connector-java-5.1.6.jar",
                 "mysql", "mysql-connector-java", "5.1.6",
                 "380ef5226de2c85ff3b38cbfefeea881c5fce09d");
@@ -65,23 +67,24 @@ public class Build extends BuildBase {
                 File.pathSeparator + "ext/derby-10.10.1.1.jar" +
                 File.pathSeparator + "ext/derbyclient-10.10.1.1.jar" +
                 File.pathSeparator + "ext/derbynet-10.10.1.1.jar" +
-                File.pathSeparator + "ext/postgresql-8.3-603.jdbc3.jar" +
+                File.pathSeparator + "ext/postgresql-9.4.1209.jre6.jar" +
                 File.pathSeparator + "ext/mysql-connector-java-5.1.6.jar";
         StringList args = args("-Xmx128m",
                 "-cp", cp, "org.h2.test.bench.TestPerformance");
-        exec("java", args.plus("-init", "-db", "1"));
-        exec("java", args.plus("-db", "2"));
-        exec("java", args.plus("-db", "3", "-out", "pe.html"));
-        exec("java", args.plus("-init", "-db", "4"));
-        exec("java", args.plus("-db", "5", "-exit"));
-        exec("java", args.plus("-db", "6"));
-        exec("java", args.plus("-db", "7"));
-        exec("java", args.plus("-db", "8", "-out", "ps.html"));
+        execJava(args.plus("-init", "-db", "1"));
+        execJava(args.plus("-db", "2"));
+        execJava(args.plus("-db", "3", "-out", "pe.html"));
+        execJava(args.plus("-init", "-db", "4"));
+        execJava(args.plus("-db", "5", "-exit"));
+        execJava(args.plus("-db", "6"));
+        execJava(args.plus("-db", "7"));
+        execJava(args.plus("-db", "8", "-out", "ps.html"));
     }
 
     /**
      * Clean all jar files, classes, and generated documentation.
      */
+    @Description(summary = "Clean all jar files, classes, and generated documentation.")
     public void clean() {
         delete("temp");
         delete("docs");
@@ -91,8 +94,9 @@ public class Build extends BuildBase {
     }
 
     /**
-     * Compile all classes
+     * Compile all classes.
      */
+    @Description(summary = "Compile all classes.")
     public void compile() {
         compile(true, false, false);
     }
@@ -113,6 +117,7 @@ public class Build extends BuildBase {
     /**
      * Run the Emma code coverage.
      */
+    @Description(summary = "Run the Emma code coverage.")
     public void coverage() {
         downloadTest();
         downloadUsingMaven("ext/emma-2.0.5312.jar",
@@ -120,19 +125,18 @@ public class Build extends BuildBase {
                 "30a40933caf67d88d9e75957950ccf353b181ab7");
         String cp = "temp" + File.pathSeparator + "bin" +
             File.pathSeparator + "ext/emma-2.0.5312.jar" +
-            File.pathSeparator + "ext/postgresql-8.3-603.jdbc3.jar" +
-            File.pathSeparator + "ext/servlet-api-3.0.1.jar" +
-            File.pathSeparator + "ext/lucene-core-3.0.2.jar" +
+            File.pathSeparator + "ext/postgresql-9.4.1209.jre6.jar" +
+            File.pathSeparator + "ext/servlet-api-3.1.0.jar" +
+            File.pathSeparator + "ext/lucene-core-3.6.2.jar" +
             File.pathSeparator + "ext/h2mig_pagestore_addon.jar" +
             File.pathSeparator + "ext/org.osgi.core-4.2.0.jar" +
             File.pathSeparator + "ext/org.osgi.enterprise-4.2.0.jar" +
-            File.pathSeparator + "ext/jts-1.13.jar" +
+            File.pathSeparator + "ext/jts-core-1.14.0.jar" +
             File.pathSeparator + "ext/slf4j-api-1.6.0.jar" +
             File.pathSeparator + "ext/slf4j-nop-1.6.0.jar" +
-            File.pathSeparator + System.getProperty("java.home") +
-            "/../lib/tools.jar";
+            File.pathSeparator + javaToolsJar;
         // -XX:-UseSplitVerifier is for Java 7 compatibility
-        exec("java", args(
+        execJava(args(
                 "-Xmx128m",
                 "-XX:-UseSplitVerifier",
                 "-cp", cp, "emma", "run",
@@ -147,6 +151,7 @@ public class Build extends BuildBase {
     /**
      * Switch the source code to the current JDK.
      */
+    @Description(summary = "Switch the source code to match the current JDK.")
     public void switchSource() {
         switchSource(true);
     }
@@ -199,13 +204,13 @@ public class Build extends BuildBase {
         mkdir("temp");
         download();
         String classpath = "temp" +
-                File.pathSeparator + "ext/servlet-api-3.0.1.jar" +
-                File.pathSeparator + "ext/lucene-core-3.0.2.jar" +
+                File.pathSeparator + "ext/servlet-api-3.1.0.jar" +
+                File.pathSeparator + "ext/lucene-core-3.6.2.jar" +
                 File.pathSeparator + "ext/slf4j-api-1.6.0.jar" +
                 File.pathSeparator + "ext/org.osgi.core-4.2.0.jar" +
                 File.pathSeparator + "ext/org.osgi.enterprise-4.2.0.jar" +
-                File.pathSeparator + "ext/jts-1.13.jar" +
-                File.pathSeparator + System.getProperty("java.home") + "/../lib/tools.jar";
+                File.pathSeparator + "ext/jts-core-1.14.0.jar" +
+                File.pathSeparator + javaToolsJar;
         FileList files;
         if (clientOnly) {
             files = files("src/main/org/h2/Driver.java");
@@ -234,6 +239,8 @@ public class Build extends BuildBase {
         if (!clientOnly) {
             files = files("src/test");
             files.addAll(files("src/tools"));
+            //we don't use Junit for this test framework
+            files = files.exclude("src/test/org/h2/test/TestAllJunit.java");
             args = args("-Xlint:unchecked", "-Xlint:deprecation",
                     "-d", "temp", "-sourcepath", "src/test" + File.pathSeparator + "src/tools",
                     "-classpath", classpath);
@@ -260,6 +267,7 @@ public class Build extends BuildBase {
      * Create the documentation from the documentation sources. API Javadocs are
      * created as well.
      */
+    @Description(summary = "Create the documentation from sources (incl. API Javadocs).")
     public void docs() {
         javadoc();
         copy("docs", files("src/docsrc/index.html"), "src/docsrc");
@@ -283,17 +291,18 @@ public class Build extends BuildBase {
      * Download all required jar files. Actually those are only compile time
      * dependencies. The database can be used without any dependencies.
      */
+    @Description(summary = "Download all required jar files.")
     public void download() {
         downloadOrVerify(false);
     }
 
     private void downloadOrVerify(boolean offline) {
-        downloadOrVerify("ext/servlet-api-3.0.1.jar",
-                "javax/servlet", "javax.servlet-api", "3.0.1",
-                "6bf0ebb7efd993e222fc1112377b5e92a13b38dd", offline);
-        downloadOrVerify("ext/lucene-core-3.0.2.jar",
-                "org/apache/lucene", "lucene-core", "3.0.2",
-                "c2b48995ab855c1b9ea13867a0f976c994e0105d", offline);
+        downloadOrVerify("ext/servlet-api-3.1.0.jar",
+                "javax/servlet", "javax.servlet-api", "3.1.0",
+                "3cd63d075497751784b2fa84be59432f4905bf7c", offline);
+        downloadOrVerify("ext/lucene-core-3.6.2.jar",
+                "org/apache/lucene", "lucene-core", "3.6.2",
+                "9ec77e2507f9cc01756964c71d91efd8154a8c47", offline);
         downloadOrVerify("ext/slf4j-api-1.6.0.jar",
                 "org/slf4j", "slf4j-api", "1.6.0",
                 "b353147a7d51fcfcd818d8aa6784839783db0915", offline);
@@ -303,9 +312,12 @@ public class Build extends BuildBase {
         downloadOrVerify("ext/org.osgi.enterprise-4.2.0.jar",
                 "org/osgi", "org.osgi.enterprise", "4.2.0",
                 "8634dcb0fc62196e820ed0f1062993c377f74972", offline);
-        downloadOrVerify("ext/jts-1.13.jar",
-                "com/vividsolutions", "jts", "1.13",
-                "3ccfb9b60f04d71add996a666ceb8902904fd805", offline);
+        downloadOrVerify("ext/jts-core-1.14.0.jar",
+                "com/vividsolutions", "jts-core", "1.14.0",
+                "ff63492fba33a395f0da17720dd1716aba0d8c84", offline);
+        downloadOrVerify("ext/junit-4.12.jar",
+                "junit", "junit", "4.12",
+                "2973d150c0dc1fefe998f834810d68f278ea58ec", offline);
     }
 
     private void downloadOrVerify(String target, String group, String artifact,
@@ -332,10 +344,9 @@ public class Build extends BuildBase {
                 "com/h2database", "h2", "1.2.127",
                 "056e784c7cf009483366ab9cd8d21d02fe47031a");
         // for TestPgServer
-
-        downloadUsingMaven("ext/postgresql-8.3-603.jdbc3.jar",
-                "postgresql", "postgresql", "8.3-603.jdbc3",
-                "33d531c3c53055ddcbea3d88bfa093466ffef924");
+        downloadUsingMaven("ext/postgresql-9.4.1209.jre6.jar",
+                "org.postgresql", "postgresql", "9.4.1209.jre6",
+                "2ed7a5a8c952d9ea18af92efea7e56ef854abfea");
         // for TestTraceSystem
         downloadUsingMaven("ext/slf4j-nop-1.6.0.jar",
                 "org/slf4j", "slf4j-nop", "1.6.0",
@@ -353,6 +364,7 @@ public class Build extends BuildBase {
     /**
      * Create the h2.zip file and the Windows installer.
      */
+    @Description(summary = "Create the h2.zip file and the Windows installer.")
     public void installer() {
         delete(files("bin").keep("*.jar"));
         jar();
@@ -401,9 +413,27 @@ public class Build extends BuildBase {
         writeFile(new File(fileName), checksums.getBytes());
     }
 
+    private static String canonicalPath(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private FileList excludeTestMetaInfFiles(FileList files) {
+        FileList testMetaInfFiles = files("src/test/META-INF");
+        int basePathLength = canonicalPath(new File("src/test")).length();
+        for (File file : testMetaInfFiles) {
+            files = files.exclude(canonicalPath(file).substring(basePathLength + 1));
+        }
+        return files;
+    }
+
     /**
      * Create the regular h2.jar file.
      */
+    @Description(summary = "Create the regular h2.jar file.")
     public void jar() {
         compile();
         manifest("H2 Database Engine", "org.h2.tools.Console");
@@ -424,6 +454,7 @@ public class Build extends BuildBase {
             exclude("*.sh").
             exclude("*.txt").
             exclude("*.DS_Store");
+        files = excludeTestMetaInfFiles(files);
         jar("bin/h2" + getJarSuffix(), files, "temp");
         filter("src/installer/h2.sh", "bin/h2.sh", "h2.jar", "h2" + getJarSuffix());
         filter("src/installer/h2.bat", "bin/h2.bat", "h2.jar", "h2" + getJarSuffix());
@@ -434,6 +465,7 @@ public class Build extends BuildBase {
      * Create the file h2android.jar. This only contains the embedded database,
      * plus the H2 Android API. Debug information is disabled.
      */
+    @Description(summary = "Create h2android.jar with only the embedded DB and H2 Android API.")
     public void jarAndroid() {
         compile(false, false, true);
         FileList files = files("temp").
@@ -455,6 +487,7 @@ public class Build extends BuildBase {
             exclude("*.sh").
             exclude("*.txt").
             exclude("*.DS_Store");
+        files = excludeTestMetaInfFiles(files);
         files.add(new File("temp/org/h2/tools/DeleteDbFiles.class"));
         files.add(new File("temp/org/h2/tools/CompressTool.class"));
         jar("bin/h2android" + getJarSuffix(), files, "temp");
@@ -464,6 +497,7 @@ public class Build extends BuildBase {
      * Create the h2client.jar. This only contains the remote JDBC
      * implementation.
      */
+    @Description(summary = "Create h2client.jar with only the remote JDBC implementation.")
     public void jarClient() {
         compile(true, true, false);
         FileList files = files("temp").
@@ -479,6 +513,7 @@ public class Build extends BuildBase {
             exclude("*.sh").
             exclude("*.txt").
             exclude("*.DS_Store");
+        files = excludeTestMetaInfFiles(files);
         long kb = jar("bin/h2-client" + getJarSuffix(), files, "temp");
         if (kb < 350 || kb > 450) {
             throw new RuntimeException("Expected file size 350 - 450 KB, got: " + kb);
@@ -488,11 +523,13 @@ public class Build extends BuildBase {
     /**
      * Create the file h2mvstore.jar. This only contains the MVStore.
      */
+    @Description(summary = "Create h2mvstore.jar containing only the MVStore.")
     public void jarMVStore() {
         compileMVStore(true);
         manifestMVStore();
         FileList files = files("temp");
         files.exclude("*.DS_Store");
+        files = excludeTestMetaInfFiles(files);
         jar("bin/h2-mvstore" + getJarSuffix(), files, "temp");
     }
 
@@ -500,6 +537,7 @@ public class Build extends BuildBase {
      * Create the file h2small.jar. This only contains the embedded database.
      * Debug information is disabled.
      */
+    @Description(summary = "Create h2small.jar containing only the embedded database.")
     public void jarSmall() {
         compile(false, false, true);
         FileList files = files("temp").
@@ -525,6 +563,7 @@ public class Build extends BuildBase {
             exclude("*.sh").
             exclude("*.txt").
             exclude("*.DS_Store");
+        files = excludeTestMetaInfFiles(files);
         files.add(new File("temp/org/h2/tools/DeleteDbFiles.class"));
         files.add(new File("temp/org/h2/tools/CompressTool.class"));
         jar("bin/h2small" + getJarSuffix(), files, "temp");
@@ -534,18 +573,21 @@ public class Build extends BuildBase {
      * Create the file h2jaqu.jar. This only contains the JaQu (Java Query)
      * implementation. All other jar files do not include JaQu.
      */
+    @Description(summary = "Create jaqu.jar with only the Java Query implementation.")
     public void jarJaqu() {
         compile(true, false, true);
         manifest("H2 JaQu", "");
         FileList files = files("temp/org/h2/jaqu");
         files.addAll(files("temp/META-INF/MANIFEST.MF"));
         files.exclude("*.DS_Store");
+        files = excludeTestMetaInfFiles(files);
         jar("bin/h2jaqu" + getJarSuffix(), files, "temp");
     }
 
     /**
-     * Create the Javadocs of the API (including the JDBC API) and tools.
+     * Create the Javadocs of the API (incl. the JDBC API) and tools.
      */
+    @Description(summary = "Create the API Javadocs (incl. JDBC API and tools).")
     public void javadoc() {
         compileTools();
         delete("docs");
@@ -553,8 +595,8 @@ public class Build extends BuildBase {
         javadoc("-sourcepath", "src/main", "org.h2.jdbc", "org.h2.jdbcx",
                 "org.h2.tools", "org.h2.api", "org.h2.engine", "org.h2.fulltext",
                 "-classpath",
-                "ext/lucene-core-3.0.2.jar" +
-                File.pathSeparator + "ext/jts-1.13.jar",
+                "ext/lucene-core-3.6.2.jar" +
+                File.pathSeparator + "ext/jts-core-1.14.0.jar",
                 "-docletpath", "bin" + File.pathSeparator + "temp",
                 "-doclet", "org.h2.build.doclet.Doclet");
         copy("docs/javadoc", files("src/docsrc/javadoc"), "src/docsrc/javadoc");
@@ -563,38 +605,54 @@ public class Build extends BuildBase {
     /**
      * Create the Javadocs of the implementation.
      */
+    @Description(summary = "Create the Javadocs of the implementation.")
     public void javadocImpl() {
         compileTools();
         mkdir("docs/javadocImpl2");
         javadoc("-sourcepath", "src/main" +
                 File.pathSeparator + "src/test" +
-                File.pathSeparator + "src/tools" ,
+                File.pathSeparator + "src/tools",
+                "-Xdoclint:none",
                 "-noindex",
                 "-tag", "h2.resource",
                 "-d", "docs/javadocImpl2",
-                "-classpath", System.getProperty("java.home") +
-                "/../lib/tools.jar" +
+                "-classpath", javaToolsJar +
                 File.pathSeparator + "ext/slf4j-api-1.6.0.jar" +
-                File.pathSeparator + "ext/servlet-api-3.0.1.jar" +
-                File.pathSeparator + "ext/lucene-core-3.0.2.jar" +
+                File.pathSeparator + "ext/servlet-api-3.1.0.jar" +
+                File.pathSeparator + "ext/lucene-core-3.6.2.jar" +
                 File.pathSeparator + "ext/org.osgi.core-4.2.0.jar" +
                 File.pathSeparator + "ext/org.osgi.enterprise-4.2.0.jar" +
-                File.pathSeparator + "ext/jts-1.13.jar",
+                File.pathSeparator + "ext/jts-core-1.14.0.jar",
                 "-subpackages", "org.h2",
                 "-exclude", "org.h2.test.jaqu:org.h2.jaqu");
+
+        mkdir("docs/javadocImpl3");
+        javadoc("-sourcepath", "src/main",
+                "-noindex",
+                "-tag", "h2.resource",
+                "-d", "docs/javadocImpl3",
+                "-classpath", javaToolsJar +
+                File.pathSeparator + "ext/slf4j-api-1.6.0.jar" +
+                File.pathSeparator + "ext/servlet-api-3.1.0.jar" +
+                File.pathSeparator + "ext/lucene-core-3.6.2.jar" +
+                File.pathSeparator + "ext/org.osgi.core-4.2.0.jar" +
+                File.pathSeparator + "ext/org.osgi.enterprise-4.2.0.jar" +
+                File.pathSeparator + "ext/jts-core-1.14.0.jar",
+                "-subpackages", "org.h2.mvstore",
+                "-exclude", "org.h2.mvstore.db");
+
         System.setProperty("h2.interfacesOnly", "false");
         System.setProperty("h2.javadocDestDir", "docs/javadocImpl");
         javadoc("-sourcepath", "src/main" +
                 File.pathSeparator + "src/test" +
                 File.pathSeparator + "src/tools",
-                "-classpath",
-                System.getProperty("java.home") + "/../lib/tools.jar" +
+                "-classpath", javaToolsJar +
                 File.pathSeparator + "ext/slf4j-api-1.6.0.jar" +
-                File.pathSeparator + "ext/servlet-api-3.0.1.jar" +
-                File.pathSeparator + "ext/lucene-core-3.0.2.jar" +
+                File.pathSeparator + "ext/servlet-api-3.1.0.jar" +
+                File.pathSeparator + "ext/lucene-core-3.6.2.jar" +
                 File.pathSeparator + "ext/org.osgi.core-4.2.0.jar" +
                 File.pathSeparator + "ext/org.osgi.enterprise-4.2.0.jar" +
-                File.pathSeparator + "ext/jts-1.13.jar",
+                File.pathSeparator + "ext/jts-core-1.14.0.jar",
                 "-subpackages", "org.h2",
                 "-exclude", "org.h2.test.jaqu:org.h2.jaqu",
                 "-package",
@@ -634,6 +692,7 @@ public class Build extends BuildBase {
      * file:///data/h2database/m2-repo. This is only required when
      * a new H2 version is made.
      */
+    @Description(summary = "Build H2 release jars and upload to file:///data/h2database/m2-repo.")
     public void mavenDeployCentral() {
         // generate and deploy h2*-sources.jar file
         FileList files = files("src/main");
@@ -694,6 +753,50 @@ public class Build extends BuildBase {
                 "-DartifactId=h2",
                 "-DgroupId=com.h2database"));
 
+        // generate the h2-mvstore-*-sources.jar file
+        files = files("src/main");
+        copy("docs", files, "src/main");
+        files = files("docs").keep("docs/org/h2/mvstore/*").
+                exclude("docs/org/h2/mvstore/db/*").
+                keep("*.java");
+        files.addAll(files("docs").keep("docs/META-INF/*"));
+        manifest = new String(readFile(new File(
+                "src/installer/source-manifest.mf")));
+        manifest = replaceAll(manifest, "${version}", getVersion());
+        writeFile(new File("docs/META-INF/MANIFEST.MF"), manifest.getBytes());
+        jar("docs/h2-mvstore-" + getVersion() + "-sources.jar", files, "docs");
+        delete("docs/org");
+        delete("docs/META-INF");
+
+        // deploy the h2-mvstore-*-source.jar file
+        execScript("mvn", args(
+                "deploy:deploy-file",
+                "-Dfile=docs/h2-mvstore-" + getVersion() + "-sources.jar",
+                "-Durl=file:///data/h2database/m2-repo",
+                "-Dpackaging=jar",
+                "-Dclassifier=sources",
+                "-Dversion=" + getVersion(),
+                "-DartifactId=h2-mvstore",
+                "-DgroupId=com.h2database"
+                // ,"-DgeneratePom=false"
+                ));
+
+        // generate and deploy the h2-mvstore-*-javadoc.jar file
+        javadocImpl();
+        files = files("docs/javadocImpl3");
+        jar("docs/h2-mvstore-" + getVersion() + "-javadoc.jar", files, "docs/javadocImpl3");
+        execScript("mvn", args(
+                "deploy:deploy-file",
+                "-Dfile=docs/h2-mvstore-" + getVersion() + "-javadoc.jar",
+                "-Durl=file:///data/h2database/m2-repo",
+                "-Dpackaging=jar",
+                "-Dclassifier=javadoc",
+                "-Dversion=" + getVersion(),
+                "-DartifactId=h2-mvstore",
+                "-DgroupId=com.h2database"
+                // ,"-DgeneratePom=false"
+                ));
+
         // generate and deploy the h2-mvstore-*.jar file
         jarMVStore();
         pom = new String(readFile(new File("src/installer/pom-mvstore-template.xml")));
@@ -711,9 +814,10 @@ public class Build extends BuildBase {
     }
 
     /**
-     * This will build a 'snapshot' H2 .jar file and upload it the to the local
+     * This will build a 'snapshot' H2 .jar file and upload it to the local
      * Maven 2 repository.
      */
+    @Description(summary = "Build a snapshot H2 jar and upload to local Maven 2 repo.")
     public void mavenInstallLocal() {
         // MVStore
         jarMVStore();
@@ -748,6 +852,7 @@ public class Build extends BuildBase {
      * required files are missing, they are are listed, and the jar file is not
      * built.
      */
+    @Description(summary = "Build H2 jar avoiding downloads (list missing files).")
     public void offline() {
         downloadOrVerify(true);
         if (filesMissing) {
@@ -763,8 +868,8 @@ public class Build extends BuildBase {
             java("org.h2.build.doc.GenerateHelp", null);
             javadoc("-sourcepath", "src/main", "org.h2.tools", "org.h2.jmx",
                     "-classpath",
-                    "ext/lucene-core-3.0.2.jar" +
-                    File.pathSeparator + "ext/jts-1.13.jar",
+                    "ext/lucene-core-3.6.2.jar" +
+                    File.pathSeparator + "ext/jts-core-1.14.0.jar",
                     "-docletpath", "bin" + File.pathSeparator + "temp",
                     "-doclet", "org.h2.build.doclet.ResourceDoclet");
         }
@@ -787,6 +892,7 @@ public class Build extends BuildBase {
     /**
      * Just run the spellchecker.
      */
+    @Description(summary = "Run the spellchecker.")
     public void spellcheck() {
         java("org.h2.build.doc.SpellChecker", null);
     }
@@ -794,6 +900,7 @@ public class Build extends BuildBase {
     /**
      * Compile and run all tests. This does not include the compile step.
      */
+    @Description(summary = "Compile and run all tests (excluding the compile step).")
     public void test() {
         test(false);
     }
@@ -801,6 +908,7 @@ public class Build extends BuildBase {
     /**
      * Compile and run all fast tests. This does not include the compile step.
      */
+    @Description(summary = "Compile and run all fast tests (excl. the compile step).")
     public void testFast() {
         test(true);
     }
@@ -808,33 +916,41 @@ public class Build extends BuildBase {
     private void test(boolean fast) {
         downloadTest();
         String cp = "temp" + File.pathSeparator + "bin" +
-                File.pathSeparator + "ext/postgresql-8.3-603.jdbc3.jar" +
-                File.pathSeparator + "ext/servlet-api-3.0.1.jar" +
-                File.pathSeparator + "ext/lucene-core-3.0.2.jar" +
+                File.pathSeparator + "ext/postgresql-9.4.1209.jre6.jar" +
+                File.pathSeparator + "ext/servlet-api-3.1.0.jar" +
+                File.pathSeparator + "ext/lucene-core-3.6.2.jar" +
                 File.pathSeparator + "ext/h2mig_pagestore_addon.jar" +
                 File.pathSeparator + "ext/org.osgi.core-4.2.0.jar" +
                 File.pathSeparator + "ext/org.osgi.enterprise-4.2.0.jar" +
-                File.pathSeparator + "ext/jts-1.13.jar" +
+                File.pathSeparator + "ext/jts-core-1.14.0.jar" +
                 File.pathSeparator + "ext/slf4j-api-1.6.0.jar" +
                 File.pathSeparator + "ext/slf4j-nop-1.6.0.jar" +
-                File.pathSeparator + System.getProperty("java.home") +
-                "/../lib/tools.jar";
+                File.pathSeparator + javaToolsJar;
+        int ret;
         if (fast) {
-            exec("java", args(
+            ret = execJava(args(
+                    "-ea",
                     "-Xmx128m",
+                    "-XX:MaxDirectMemorySize=2g",
                     "-cp", cp,
                     "org.h2.test.TestAll", "fast"));
         } else {
-            exec("java", args(
+            ret = execJava(args(
+                    "-ea",
                     "-Xmx128m",
                     "-cp", cp,
                     "org.h2.test.TestAll"));
         }
+        // return a failure code for Jenkins/Travis/CI builds
+        if (ret != 0) {
+            System.exit(ret);
+        }
     }
 
     /**
-     * Print the system properties
+     * Print the system properties.
      */
+    @Description(summary = "Print the system properties.")
     public void testSysProperties() {
         System.out.println("environment settings:");
         for (Entry<Object, Object> e : new TreeMap<Object, Object>(
@@ -846,9 +962,10 @@ public class Build extends BuildBase {
     /**
      * Test the local network of this machine.
      */
+    @Description(summary = "Test the local network of this machine.")
     public void testNetwork() {
         try {
-            long start = System.currentTimeMillis();
+            long start = System.nanoTime();
             System.out.println("localhost:");
             System.out.println("  " + InetAddress.getByName("localhost"));
             for (InetAddress address : InetAddress.getAllByName("localhost")) {
@@ -872,7 +989,7 @@ public class Build extends BuildBase {
             System.out.println(serverSocket);
             int port = serverSocket.getLocalPort();
             final ServerSocket accept = serverSocket;
-            start = System.currentTimeMillis();
+            start = System.nanoTime();
             Thread thread = new Thread() {
                 @Override
                 public void run() {
@@ -894,9 +1011,10 @@ public class Build extends BuildBase {
                 }
             };
             thread.start();
-            System.out.println("time: " + (System.currentTimeMillis() - start));
+            System.out.println("time: " +
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
             Thread.sleep(1000);
-            start = System.currentTimeMillis();
+            start = System.nanoTime();
             final Socket socket = new Socket();
             socket.setSoTimeout(2000);
             final InetSocketAddress socketAddress = new InetSocketAddress(address, port);
@@ -921,21 +1039,24 @@ public class Build extends BuildBase {
                             + socketAddress);
                     socket.connect(localhostAddress, 2000);
                 }
-                System.out.println("time: " + (System.currentTimeMillis() - start));
+                System.out.println("time: " +
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
                 Thread.sleep(200);
-                start = System.currentTimeMillis();
+                start = System.nanoTime();
                 System.out.println("client:" + socket.toString());
                 socket.getOutputStream().write(123);
-                System.out.println("time: " + (System.currentTimeMillis() - start));
+                System.out.println("time: " +
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
                 Thread.sleep(100);
-                start = System.currentTimeMillis();
+                start = System.nanoTime();
                 System.out.println("client read:" + socket.getInputStream().read());
                 socket.close();
             } catch (Throwable t) {
                 t.printStackTrace();
             }
             thread.join(5000);
-            System.out.println("time: " + (System.currentTimeMillis() - start));
+            System.out.println("time: " +
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
             if (thread.isAlive()) {
                 System.out.println("thread is still alive, interrupting");
                 thread.interrupt();
@@ -952,6 +1073,7 @@ public class Build extends BuildBase {
      * of the automated build (including test results, newsfeed, code coverage)
      * to the public web site.
      */
+    @Description(summary = "Upload all build results to the public website.")
     public void uploadBuild() {
         String password = System.getProperty("h2.ftpPassword");
         if (password == null) {
@@ -969,7 +1091,7 @@ public class Build extends BuildBase {
         javac(args, files);
         String cp = "bin" + File.pathSeparator + "temp" +
                 File.pathSeparator + "ext/h2mig_pagestore_addon.jar";
-        exec("java", args("-Xmx512m", "-cp", cp,
+        execJava(args("-Xmx512m", "-cp", cp,
                 "-Dh2.ftpPassword=" + password,
                 "org.h2.build.doc.UploadBuild"));
     }
@@ -977,6 +1099,7 @@ public class Build extends BuildBase {
     /**
      * Build the h2console.war file.
      */
+    @Description(summary = "Build the h2console.war file.")
     public void warConsole() {
         jar();
         copy("temp/WEB-INF", files("src/tools/WEB-INF/web.xml"), "src/tools/WEB-INF");

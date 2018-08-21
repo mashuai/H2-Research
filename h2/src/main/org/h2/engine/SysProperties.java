@@ -29,6 +29,7 @@ import org.h2.util.Utils;
  * System.setProperty(&quot;h2.baseDir&quot;, &quot;/temp&quot;);
  * </pre>
  */
+@SuppressWarnings("unused")
 public class SysProperties {
 
     /**
@@ -122,7 +123,7 @@ public class SysProperties {
     //*/
 
     /**
-     * System property <code>h2.check2</code> (default: true).<br />
+     * System property <code>h2.check2</code> (default: false).<br />
      * Additional assertions in the database engine.
      */
     //## CHECK ##
@@ -424,16 +425,6 @@ public class SysProperties {
             Utils.getProperty("h2.splitFileSizeShift", 30);
 
     /**
-     * System property <code>h2.storeLocalTime</code>
-     * (default: false for version 1.3, true for version 1.4).<br />
-     * Store the local time. If disabled, the daylight saving offset is not
-     * taken into account.
-     */
-    public static final boolean STORE_LOCAL_TIME =
-            Utils.getProperty("h2.storeLocalTime",
-                    Constants.VERSION_MINOR >= 4 ? true : false);
-
-    /**
      * System property <code>h2.syncMethod</code> (default: sync).<br />
      * What method to call when closing the database, on checkpoint, and on
      * CHECKPOINT SYNC. The following options are supported:
@@ -452,6 +443,14 @@ public class SysProperties {
      */
     public static final boolean TRACE_IO =
             Utils.getProperty("h2.traceIO", false);
+
+    /**
+     * System property <code>h2.threadDeadlockDetector</code>
+     * (default: false).<br />
+     * Detect thread deadlocks in a background thread.
+     */
+    public static final boolean THREAD_DEADLOCK_DETECTOR =
+            Utils.getProperty("h2.threadDeadlockDetector", false);
 
     /**
      * System property <code>h2.implicitRelativePath</code>
@@ -523,6 +522,16 @@ public class SysProperties {
      */
     public static final String JAVA_OBJECT_SERIALIZER =
             Utils.getProperty("h2.javaObjectSerializer", null);
+
+    /**
+     * System property <code>h2.customDataTypesHandler</code>
+     * (default: null).<br />
+     * The CustomDataTypesHandler class name that is used
+     * to provide support for user defined custom data types.
+     * It must be the same on client and server to work correctly.
+     */
+    public static final String CUSTOM_DATA_TYPES_HANDLER =
+            Utils.getProperty("h2.customDataTypesHandler", null);
 
     private static final String H2_BASE_DIR = "h2.baseDir";
 

@@ -7,6 +7,8 @@ package org.h2.command;
 
 import java.util.ArrayList;
 import org.h2.api.DatabaseEventListener;
+import org.h2.command.dml.Explain;
+import org.h2.command.dml.Query;
 import org.h2.expression.Parameter;
 import org.h2.expression.ParameterInterface;
 import org.h2.result.ResultInterface;
@@ -17,7 +19,7 @@ import org.h2.value.ValueNull;
  * Represents a single SQL statements.
  * It wraps a prepared statement.
  */
-class CommandContainer extends Command {
+public class CommandContainer extends Command {
 
     private Prepared prepared;
     private boolean readOnlyKnown;
@@ -43,8 +45,28 @@ class CommandContainer extends Command {
     public boolean isQuery() {
         return prepared.isQuery();
     }
-    
+
     //重新解析并prepare
+    @Override
+    public void prepareJoinBatch() {
+        if (session.isJoinBatchEnabled()) {
+            prepareJoinBatch(prepared);
+        }
+    }
+
+    private static void prepareJoinBatch(Prepared prepared) {
+        if (prepared.isQuery()) {
+            int type = prepared.getType();
+
+            if (type == CommandInterface.SELECT) {
+                ((Query) prepared).prepareJoinBatch();
+            } else if (type == CommandInterface.EXPLAIN ||
+                    type == CommandInterface.EXPLAIN_ANALYZE) {
+                prepareJoinBatch(((Explain) prepared).getCommand());
+            }
+        }
+    }
+
     private void recompileIfRequired() {
         if (prepared.needRecompile()) {
             // TODO test with 'always recompile'
@@ -66,6 +88,7 @@ class CommandContainer extends Command {
             }
             prepared.prepare();
             prepared.setModificationMetaId(mod);
+            prepareJoinBatch();
         }
     }
 
@@ -77,7 +100,7 @@ class CommandContainer extends Command {
         session.setLastScopeIdentity(ValueNull.INSTANCE);
         prepared.checkParameters();
         int updateCount = prepared.update();
-        prepared.trace(startTime, updateCount);
+        prepared.trace(startTimeNanos, updateCount);
         setProgress(DatabaseEventListener.STATE_STATEMENT_END);
         return updateCount;
     }
@@ -89,13 +112,15 @@ class CommandContainer extends Command {
         start();
         prepared.checkParameters();
         ResultInterface result = prepared.query(maxrows);
-        prepared.trace(startTime, result.getRowCount());
+        prepared.trace(startTimeNanos, result.isLazy() ? 0 : result.getRowCount());
         setProgress(DatabaseEventListener.STATE_STATEMENT_END);
         return result;
     }
 
     @Override
     public boolean isReadOnly() {
+        // call和select这两个语句对应的isReadOnly()会调用Expression.isEverything,
+        // 是一个有点耗时的事，所以最好只调用一次
         if (!readOnlyKnown) {
             readOnly = prepared.isReadOnly();
             readOnlyKnown = true;

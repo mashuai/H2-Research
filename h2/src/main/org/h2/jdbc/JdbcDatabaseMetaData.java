@@ -11,6 +11,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.RowIdLifetime;
 import java.sql.SQLException;
+import java.sql.Types;
+import java.util.Arrays;
+import java.util.Properties;
 import org.h2.engine.Constants;
 import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
@@ -24,10 +27,9 @@ import org.h2.util.StringUtils;
  * Represents the meta data for a database.
  */
 public class JdbcDatabaseMetaData extends TraceObject implements
-        DatabaseMetaData {
+        DatabaseMetaData, JdbcDatabaseMetaDataBackwardsCompat {
 
     private final JdbcConnection conn;
-    private String mode;
 
     JdbcDatabaseMetaData(JdbcConnection conn, Trace trace, int id) {
         setTrace(trace, TraceObject.DATABASE_META_DATA, id);
@@ -152,7 +154,8 @@ public class JdbcDatabaseMetaData extends TraceObject implements
             } else {
                 tableType = "TRUE";
             }
-            PreparedStatement prep = conn.prepareAutoCloseStatement("SELECT "
+
+            String tableSelect = "SELECT "
                     + "TABLE_CATALOG TABLE_CAT, "
                     + "TABLE_SCHEMA TABLE_SCHEM, "
                     + "TABLE_NAME, "
@@ -168,16 +171,55 @@ public class JdbcDatabaseMetaData extends TraceObject implements
                     + "WHERE TABLE_CATALOG LIKE ? ESCAPE ? "
                     + "AND TABLE_SCHEMA LIKE ? ESCAPE ? "
                     + "AND TABLE_NAME LIKE ? ESCAPE ? "
-                    + "AND (" + tableType + ") "
-                    + "ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME");
+                    + "AND (" + tableType + ") ";
+
+            boolean includeSynonyms = types == null || Arrays.asList(types).contains("SYNONYM");
+            String synonymSelect = "SELECT "
+                    + "SYNONYM_CATALOG TABLE_CAT, "
+                    + "SYNONYM_SCHEMA TABLE_SCHEM, "
+                    + "SYNONYM_NAME as TABLE_NAME, "
+                    + "TYPE_NAME AS TABLE_TYPE, "
+                    + "REMARKS, "
+                    + "TYPE_NAME TYPE_CAT, "
+                    + "TYPE_NAME TYPE_SCHEM, "
+                    + "TYPE_NAME AS TYPE_NAME, "
+                    + "TYPE_NAME SELF_REFERENCING_COL_NAME, "
+                    + "TYPE_NAME REF_GENERATION, "
+                    + "NULL AS SQL "
+                    + "FROM INFORMATION_SCHEMA.SYNONYMS "
+                    + "WHERE SYNONYM_CATALOG LIKE ? ESCAPE ? "
+                    + "AND SYNONYM_SCHEMA LIKE ? ESCAPE ? "
+                    + "AND SYNONYM_NAME LIKE ? ESCAPE ? "
+                    + "AND (" + includeSynonyms + ") ";
+
+            PreparedStatement prep = conn.prepareAutoCloseStatement("SELECT "
+                    + "TABLE_CAT, "
+                    + "TABLE_SCHEM, "
+                    + "TABLE_NAME, "
+                    + "TABLE_TYPE, "
+                    + "REMARKS, "
+                    + "TYPE_CAT, "
+                    + "TYPE_SCHEM, "
+                    + "TYPE_NAME, "
+                    + "SELF_REFERENCING_COL_NAME, "
+                    + "REF_GENERATION, "
+                    + "SQL "
+                    + "FROM (" + synonymSelect  + " UNION " + tableSelect + ") "
+                    + "ORDER BY TABLE_TYPE, TABLE_SCHEM, TABLE_NAME");
             prep.setString(1, getCatalogPattern(catalogPattern));
             prep.setString(2, "\\");
             prep.setString(3, getSchemaPattern(schemaPattern));
             prep.setString(4, "\\");
             prep.setString(5, getPattern(tableNamePattern));
             prep.setString(6, "\\");
+            prep.setString(7, getCatalogPattern(catalogPattern));
+            prep.setString(8, "\\");
+            prep.setString(9, getSchemaPattern(schemaPattern));
+            prep.setString(10, "\\");
+            prep.setString(11, getPattern(tableNamePattern));
+            prep.setString(12, "\\");
             for (int i = 0; types != null && i < types.length; i++) {
-                prep.setString(7 + i, types[i]);
+                prep.setString(13 + i, types[i]);
             }
             return prep.executeQuery();
         } catch (Exception e) {
@@ -2450,7 +2492,7 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public boolean supportsMixedCaseQuotedIdentifiers() throws SQLException {
         debugCodeCall("supportsMixedCaseQuotedIdentifiers");
-        String m = getMode();
+        String m = conn.getMode();
         if (m.equals("MySQL")) {
             return false;
         }
@@ -2466,7 +2508,7 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public boolean storesUpperCaseIdentifiers() throws SQLException {
         debugCodeCall("storesUpperCaseIdentifiers");
-        String m = getMode();
+        String m = conn.getMode();
         if (m.equals("MySQL")) {
             return false;
         }
@@ -2482,7 +2524,7 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public boolean storesLowerCaseIdentifiers() throws SQLException {
         debugCodeCall("storesLowerCaseIdentifiers");
-        String m = getMode();
+        String m = conn.getMode();
         if (m.equals("MySQL")) {
             return true;
         }
@@ -2510,7 +2552,7 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public boolean storesUpperCaseQuotedIdentifiers() throws SQLException {
         debugCodeCall("storesUpperCaseQuotedIdentifiers");
-        String m = getMode();
+        String m = conn.getMode();
         if (m.equals("MySQL")) {
             return true;
         }
@@ -2526,7 +2568,7 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public boolean storesLowerCaseQuotedIdentifiers() throws SQLException {
         debugCodeCall("storesLowerCaseQuotedIdentifiers");
-        String m = getMode();
+        String m = conn.getMode();
         if (m.equals("MySQL")) {
             return true;
         }
@@ -2542,7 +2584,7 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public boolean storesMixedCaseQuotedIdentifiers() throws SQLException {
         debugCodeCall("storesMixedCaseQuotedIdentifiers");
-        String m = getMode();
+        String m = conn.getMode();
         if (m.equals("MySQL")) {
             return false;
         }
@@ -3072,13 +3114,16 @@ public class JdbcDatabaseMetaData extends TraceObject implements
         return false;
     }
 
-    /**
-     * [Not supported] Returns the client info properties.
-     */
     @Override
     public ResultSet getClientInfoProperties() throws SQLException {
-        // we don't have any client properties, so return an empty result set
-        return new SimpleResultSet();
+        Properties clientInfo = conn.getClientInfo();
+        SimpleResultSet result = new SimpleResultSet();
+        result.addColumn("Name", Types.VARCHAR, 0, 0);
+        result.addColumn("Value", Types.VARCHAR, 0, 0);
+        for (Object key : clientInfo.keySet()) {
+            result.addRow(key, clientInfo.get(key));
+        }
+        return result;
     }
 
     /**
@@ -3090,10 +3135,14 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     @SuppressWarnings("unchecked")
     public <T> T unwrap(Class<T> iface) throws SQLException {
-        if (isWrapperFor(iface)) {
-            return (T) this;
+        try {
+            if (isWrapperFor(iface)) {
+                return (T) this;
+            }
+            throw DbException.getInvalidValueException("iface", iface);
+        } catch (Exception e) {
+            throw logAndConvert(e);
         }
-        throw DbException.getInvalidValueException("iface", iface);
     }
 
     /**
@@ -3129,12 +3178,10 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     /**
      * [Not supported]
      */
-    //## Java 1.7 ##
     @Override
     public boolean generatedKeyAlwaysReturned() {
         return true;
     }
-    //*/
 
     /**
      * [Not supported]
@@ -3147,13 +3194,11 @@ public class JdbcDatabaseMetaData extends TraceObject implements
      * @param columnNamePattern null (to get all objects) or a column name
      *            (uppercase for unquoted names)
      */
-    //## Java 1.7 ##
     @Override
     public ResultSet getPseudoColumns(String catalog, String schemaPattern,
             String tableNamePattern, String columnNamePattern) {
         return null;
     }
-    //*/
 
     /**
      * INTERNAL
@@ -3161,19 +3206,6 @@ public class JdbcDatabaseMetaData extends TraceObject implements
     @Override
     public String toString() {
         return getTraceObjectName() + ": " + conn;
-    }
-
-    private String getMode() throws SQLException {
-        if (mode == null) {
-            PreparedStatement prep = conn.prepareStatement(
-                    "SELECT VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE NAME=?");
-            prep.setString(1, "MODE");
-            ResultSet rs = prep.executeQuery();
-            rs.next();
-            mode = rs.getString(1);
-            prep.close();
-        }
-        return mode;
     }
 
 }

@@ -6,6 +6,7 @@
 package org.h2.mvstore;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.Writer;
 import java.nio.ByteBuffer;
@@ -15,6 +16,9 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
 
+import org.h2.compress.CompressDeflate;
+import org.h2.compress.CompressLZF;
+import org.h2.compress.Compressor;
 import org.h2.engine.Constants;
 import org.h2.message.DbException;
 import org.h2.mvstore.type.DataType;
@@ -30,7 +34,7 @@ public class MVStoreTool {
     /**
      * Runs this tool.
      * Options are case sensitive. Supported options are:
-     * <table>
+     * <table summary="command line options">
      * <tr><td>[-dump &lt;fileName&gt;]</td>
      * <td>Dump the contends of the file</td></tr>
      * <tr><td>[-info &lt;fileName&gt;]</td>
@@ -57,6 +61,13 @@ public class MVStoreTool {
             } else if ("-compress".equals(args[i])) {
                 String fileName = args[++i];
                 compact(fileName, true);
+            } else if ("-rollback".equals(args[i])) {
+                String fileName = args[++i];
+                long targetVersion = Long.decode(args[++i]);
+                rollback(fileName, targetVersion, new PrintWriter(System.out));
+            } else if ("-repair".equals(args[i])) {
+                String fileName = args[++i];
+                repair(fileName);
             }
         }
     }
@@ -113,9 +124,9 @@ public class MVStoreTool {
                 block.rewind();
                 int headerType = block.get();
                 if (headerType == 'H') {
+                    String header = new String(block.array(), DataUtils.LATIN).trim();
                     pw.printf("%0" + len + "x fileHeader %s%n",
-                            pos,
-                            new String(block.array(), DataUtils.LATIN).trim());
+                            pos, header);
                     pos += blockSize;
                     continue;
                 }
@@ -149,6 +160,7 @@ public class MVStoreTool {
                         new TreeMap<Integer, Integer>();
                 int pageSizeSum = 0;
                 while (remaining > 0) {
+                    int start = p;
                     try {
                         chunk.position(p);
                     } catch (IllegalArgumentException e) {
@@ -162,7 +174,7 @@ public class MVStoreTool {
                     int mapId = DataUtils.readVarInt(chunk);
                     int entries = DataUtils.readVarInt(chunk);
                     int type = chunk.get();
-                    boolean compressed = (type & 2) != 0;
+                    boolean compressed = (type & DataUtils.PAGE_COMPRESSED) != 0;
                     boolean node = (type & 1) != 0;
                     if (details) {
                         pw.printf(
@@ -206,11 +218,24 @@ public class MVStoreTool {
                     }
                     String[] keys = new String[entries];
                     if (mapId == 0 && details) {
-                        if (!compressed) {
-                            for (int i = 0; i < entries; i++) {
-                                String k = StringDataType.INSTANCE.read(chunk);
-                                keys[i] = k;
-                            }
+                        ByteBuffer data;
+                        if (compressed) {
+                            boolean fast = !((type & DataUtils.PAGE_COMPRESSED_HIGH) ==
+                                    DataUtils.PAGE_COMPRESSED_HIGH);
+                            Compressor compressor = getCompressor(fast);
+                            int lenAdd = DataUtils.readVarInt(chunk);
+                            int compLen = pageSize + start - chunk.position();
+                            byte[] comp = DataUtils.newBytes(compLen);
+                            chunk.get(comp);
+                            int l = compLen + lenAdd;
+                            data = ByteBuffer.allocate(l);
+                            compressor.expand(comp, 0, compLen, data.array(), 0, l);
+                        } else {
+                            data = chunk;
+                        }
+                        for (int i = 0; i < entries; i++) {
+                            String k = StringDataType.INSTANCE.read(data);
+                            keys[i] = k;
                         }
                         if (node) {
                             // meta map node
@@ -231,11 +256,11 @@ public class MVStoreTool {
                                     keys.length >= entries ? null : keys[entries],
                                     DataUtils.getPageChunkId(cp),
                                     DataUtils.getPageOffset(cp));
-                        } else if (!compressed) {
+                        } else {
                             // meta map leaf
                             String[] values = new String[entries];
                             for (int i = 0; i < entries; i++) {
-                                String v = StringDataType.INSTANCE.read(chunk);
+                                String v = StringDataType.INSTANCE.read(data);
                                 values[i] = v;
                             }
                             for (int i = 0; i < entries; i++) {
@@ -299,17 +324,23 @@ public class MVStoreTool {
         pw.flush();
     }
 
+    private static Compressor getCompressor(boolean fast) {
+        return fast ? new CompressLZF() : new CompressDeflate();
+    }
+
     /**
      * Read the summary information of the file and write them to system out.
      *
      * @param fileName the name of the file
      * @param writer the print writer
+     * @return null if successful (if there was no error), otherwise the error
+     *         message
      */
-    public static void info(String fileName, Writer writer) {
+    public static String info(String fileName, Writer writer) {
         PrintWriter pw = new PrintWriter(writer, true);
         if (!FilePath.get(fileName).exists()) {
             pw.println("File not found: " + fileName);
-            return;
+            return "File not found: " + fileName;
         }
         long fileLength = FileUtils.size(fileName);
         MVStore store = new MVStore.Builder().
@@ -368,10 +399,12 @@ public class MVStoreTool {
         } catch (Exception e) {
             pw.println("ERROR: " + e);
             e.printStackTrace(pw);
+            return e.getMessage();
         } finally {
             store.close();
         }
         pw.flush();
+        return null;
     }
 
     private static String formatTimestamp(long t, long start) {
@@ -495,6 +528,140 @@ public class MVStoreTool {
             MVMap<Object, Object> targetMap = target.openMap(mapName, mp);
             targetMap.copyFrom(sourceMap);
         }
+    }
+
+    /**
+     * Repair a store by rolling back to the newest good version.
+     *
+     * @param fileName the file name
+     */
+    public static void repair(String fileName) {
+        PrintWriter pw = new PrintWriter(System.out);
+        long version = Long.MAX_VALUE;
+        OutputStream ignore = new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                // ignore
+            }
+        };
+        while (version >= 0) {
+            pw.println(version == Long.MAX_VALUE ? "Trying latest version"
+                    : ("Trying version " + version));
+            pw.flush();
+            version = rollback(fileName, version, new PrintWriter(ignore));
+            try {
+                String error = info(fileName + ".temp", new PrintWriter(ignore));
+                if (error == null) {
+                    FilePath.get(fileName).moveTo(FilePath.get(fileName + ".back"), true);
+                    FilePath.get(fileName + ".temp").moveTo(FilePath.get(fileName), true);
+                    pw.println("Success");
+                    break;
+                }
+                pw.println("    ... failed: " + error);
+            } catch (Exception e) {
+                pw.println("Fail: " + e.getMessage());
+                pw.flush();
+            }
+            version--;
+        }
+        pw.flush();
+    }
+
+    /**
+     * Roll back to a given revision into a a file called *.temp.
+     *
+     * @param fileName the file name
+     * @param targetVersion the version to roll back to (Long.MAX_VALUE for the
+     *            latest version)
+     * @param writer the log writer
+     * @return the version rolled back to (-1 if no version)
+     */
+    public static long rollback(String fileName, long targetVersion, Writer writer) {
+        long newestVersion = -1;
+        PrintWriter pw = new PrintWriter(writer, true);
+        if (!FilePath.get(fileName).exists()) {
+            pw.println("File not found: " + fileName);
+            return newestVersion;
+        }
+        FileChannel file = null;
+        FileChannel target = null;
+        int blockSize = MVStore.BLOCK_SIZE;
+        try {
+            file = FilePath.get(fileName).open("r");
+            FilePath.get(fileName + ".temp").delete();
+            target = FilePath.get(fileName + ".temp").open("rw");
+            long fileSize = file.size();
+            ByteBuffer block = ByteBuffer.allocate(4096);
+            Chunk newestChunk = null;
+            for (long pos = 0; pos < fileSize;) {
+                block.rewind();
+                DataUtils.readFully(file, pos, block);
+                block.rewind();
+                int headerType = block.get();
+                if (headerType == 'H') {
+                    block.rewind();
+                    target.write(block, pos);
+                    pos += blockSize;
+                    continue;
+                }
+                if (headerType != 'c') {
+                    pos += blockSize;
+                    continue;
+                }
+                Chunk c = null;
+                try {
+                    c = Chunk.readChunkHeader(block, pos);
+                } catch (IllegalStateException e) {
+                    pos += blockSize;
+                    continue;
+                }
+                if (c.len <= 0) {
+                    // not a chunk
+                    pos += blockSize;
+                    continue;
+                }
+                int length = c.len * MVStore.BLOCK_SIZE;
+                ByteBuffer chunk = ByteBuffer.allocate(length);
+                DataUtils.readFully(file, pos, chunk);
+                if (c.version > targetVersion) {
+                    // newer than the requested version
+                    pos += length;
+                    continue;
+                }
+                chunk.rewind();
+                target.write(chunk, pos);
+                if (newestChunk == null || c.version > newestChunk.version) {
+                    newestChunk = c;
+                    newestVersion = c.version;
+                }
+                pos += length;
+            }
+            int length = newestChunk.len * MVStore.BLOCK_SIZE;
+            ByteBuffer chunk = ByteBuffer.allocate(length);
+            DataUtils.readFully(file, newestChunk.block * MVStore.BLOCK_SIZE, chunk);
+            chunk.rewind();
+            target.write(chunk, fileSize);
+        } catch (IOException e) {
+            pw.println("ERROR: " + e);
+            e.printStackTrace(pw);
+        } finally {
+            if (file != null) {
+                try {
+                    file.close();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
+            if (target != null) {
+                try {
+                    target.close();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
+        }
+        pw.flush();
+        return newestVersion;
     }
 
     /**

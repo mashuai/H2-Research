@@ -15,7 +15,6 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Random;
-
 import org.h2.api.ErrorCode;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
@@ -37,16 +36,13 @@ public class TestNestedJoins extends TestBase {
     public static void main(String... a) throws Exception {
         TestBase test = TestBase.createCaller().init();
         // test.config.traceTest = true;
-        test.config.nestedJoins = true;
         test.test();
     }
 
     @Override
     public void test() throws Exception {
-        if (!config.nestedJoins) {
-            return;
-        }
         deleteDb("nestedJoins");
+        // testCases2();
         testCases();
         testRandom();
         deleteDb("nestedJoins");
@@ -289,7 +285,7 @@ public class TestNestedJoins extends TestBase {
                 "inner join c on c.id = b.id on b.id = a.id");
         assertTrue(rs.next());
         sql = rs.getString(1);
-        assertTrue("nested", sql.contains("("));
+        assertContains(sql, "(");
         stat.execute("drop table a, b, c");
 
         // see roadmap, tag: swapInnerJoinTables
@@ -354,7 +350,7 @@ public class TestNestedJoins extends TestBase {
                 "left outer join (test c) on a.id = c.id");
         assertTrue(rs.next());
         sql = rs.getString(1);
-        assertTrue(sql.contains("PRIMARY_KEY"));
+        assertContains(sql, "PRIMARY_KEY");
         stat.execute("drop table test");
 
         /*
@@ -637,6 +633,21 @@ public class TestNestedJoins extends TestBase {
             sql = sql.replaceAll("  ", " ");
         }
         return sql;
+    }
+
+    private void testCases2() throws Exception {
+        Connection conn = getConnection("nestedJoins");
+        Statement stat = conn.createStatement();
+        stat.execute("create table a(id int primary key)");
+        stat.execute("create table b(id int primary key)");
+        stat.execute("create table c(id int primary key)");
+        stat.execute("insert into a(id) values(1)");
+        stat.execute("insert into c(id) values(1)");
+        stat.execute("insert into b(id) values(1)");
+        stat.executeQuery("select 1  from a left outer join " +
+                "(a t0 join b t1 on 1 = 1) on t1.id = 1, c");
+        conn.close();
+        deleteDb("nestedJoins");
     }
 
 }

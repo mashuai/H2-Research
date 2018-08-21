@@ -26,7 +26,6 @@ public class TestUsingIndex extends TestBase {
      * Run just this test.
      *
      * @param a ignored
-     * @throws java.lang.Exception
      */
     public static void main(String... a) throws Exception {
         TestBase.createCaller().init().test();
@@ -98,9 +97,9 @@ public class TestUsingIndex extends TestBase {
     /**
      * Return if the syntax is supported otherwise false
      *
-     * @param stat
-     * @param sql
-     * @return
+     * @param stat the statement
+     * @param sql the SQL statement
+     * @return true if the query works, false if it fails
      */
     private static boolean isSupportedSyntax(Statement stat, String sql) {
         try {

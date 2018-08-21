@@ -9,6 +9,10 @@
 22012=Delenie nulou: {0}
 22018=Chyba konverzie dát pre {0}
 22025=Chyba v LIKE ESCAPE: {0}
+22030=#Value not permitted for column {0}: {1}
+22031=#Value not a member of enumerators {0}: {1}
+22032=#Empty enums are not allowed
+22033=#Duplicate enumerators are not allowed for enum types: {0}
 23502=NULL nie je povolený pre stĺpec {0}
 23503=Porušenie obmedzenia (constraint) referenčnej integrity: {0}
 23505=Porušenie jedinečnosti (unique) indexu alebo primárneho kľúča: {0}
@@ -78,10 +82,12 @@
 90048=Nepodporovaná verzia databázového súboru alebo chybná hlavička súuboru {0}
 90049=Chyba šifrovania súboru {0}
 90050=Nesprávny formát hesiel, musí byť: súborové heslo <medzera> používateľské heslo
+90051=#Scale(${0}) must not be bigger than precision({1})
 90052=Vnorený dopyt (subquery) nie je dopyt na jeden stĺpec
 90053=Skalárny vnorený dopyt (scalar subquery) obsahuje viac ako jeden riadok
 90054=Nesprávne použitie agregačnej funkcie {0}
 90055=Nepodporovaný typ šifry {0}
+90056=#Function {0}: Invalid date format: {1}
 90057=Obmedzenie (constraint) {0} nenájdený
 90058=Commit alebo Rollback nie je povolené použiť v spúšťači (trigger)
 90059=Nejednoznačné meno stĺpca {0}
@@ -165,6 +171,7 @@
 90140=Výsledok (result set) je iba na čítanie. Je potrebné použiť conn.createStatement(.., ResultSet.CONCUR_UPDATABLE).
 90141=#Serializer cannot be changed because there is a data table: {0}
 90142=#Step size must not be zero
+90143=##Row {1} not found in primary index {0}
 HY000=Všeobecná chyba: {0}
 HY004=Neznámy dátový typ: {0}
 HYC00=Vlastnosť nie je podporovaná: {0}

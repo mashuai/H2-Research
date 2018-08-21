@@ -7,7 +7,6 @@ package org.h2.index;
 
 import java.lang.ref.SoftReference;
 import java.util.Arrays;
-
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
 import org.h2.engine.Session;
@@ -17,7 +16,6 @@ import org.h2.result.Row;
 import org.h2.store.Data;
 import org.h2.store.Page;
 import org.h2.store.PageStore;
-import org.h2.table.RegularTable;
 import org.h2.value.Value;
 
 /**
@@ -227,7 +225,7 @@ public class PageDataLeaf extends PageData {
             writtenData = false;
             //数据Overflow的当前行独占一个新的PageDataLeaf，entryCount为1
             if (entryCount > 1) {
-                DbException.throwInternalError();
+                DbException.throwInternalError("" + entryCount);
             }
             // need to write the overflow page id
             start += 4;
@@ -300,7 +298,7 @@ public class PageDataLeaf extends PageData {
         }
         entryCount--;
         if (entryCount < 0) {
-            DbException.throwInternalError();
+            DbException.throwInternalError("" + entryCount);
         }
         if (firstOverflowPageId != 0) {
             start -= 4;
@@ -632,7 +630,7 @@ public class PageDataLeaf extends PageData {
      * @param columnCount the number of columns
      * @return the row
      */
-    private static Row readRow(Data data, int pos, int columnCount) {
+    private Row readRow(Data data, int pos, int columnCount) {
         Value[] values = new Value[columnCount];
         synchronized (data) {
             data.setPos(pos);
@@ -640,7 +638,7 @@ public class PageDataLeaf extends PageData {
                 values[i] = data.readValue();
             }
         }
-        return RegularTable.createRow(values);
+        return index.getDatabase().createRow(values, Row.MEMORY_CALCULATE);
     }
 
 }

@@ -7,7 +7,6 @@ package org.h2.expression;
 
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
-
 import org.h2.api.ErrorCode;
 import org.h2.engine.Database;
 import org.h2.engine.Session;
@@ -38,6 +37,7 @@ public class CompareLike extends Condition {
 
     private char[] patternChars;
     private String patternString;
+    /** one of MATCH / ONE / ANY */
     private int[] patternTypes;
     private int patternLength;
 
@@ -47,6 +47,12 @@ public class CompareLike extends Condition {
     private boolean ignoreCase;
     private boolean fastCompare;
     private boolean invalidPattern;
+    /** indicates that we can shortcut the comparison and use startsWith */
+    private boolean shortcutToStartsWith;
+    /** indicates that we can shortcut the comparison and use endsWith */
+    private boolean shortcutToEndsWith;
+    /** indicates that we can shortcut the comparison and use contains */
+    private boolean shortcutToContains;
 
     public CompareLike(Database db, Expression left, Expression right,
             Expression escape, boolean regexp) {
@@ -177,12 +183,14 @@ public class CompareLike extends Condition {
             return;
         }
         String p = right.getValue(session).getString();
-        Value e = escape == null ? null : escape.getValue(session);
-        if (e == ValueNull.INSTANCE) {
-            // should already be optimized
-            DbException.throwInternalError();
+        if (!isInit) {
+            Value e = escape == null ? null : escape.getValue(session);
+            if (e == ValueNull.INSTANCE) {
+                // should already be optimized
+                DbException.throwInternalError();
+            }
+            initPattern(p, getEscapeChar(e));
         }
-        initPattern(p, getEscapeChar(e));
         if (invalidPattern) {
             return;
         }
@@ -196,6 +204,8 @@ public class CompareLike extends Condition {
             // column is not a varchar - can't use the index
             return;
         }
+        // Get the MATCH prefix and see if we can create an index condition from
+        // that.
         int maxMatch = 0;
         StringBuilder buff = new StringBuilder();
         while (maxMatch < patternLength && patternTypes[maxMatch] == MATCH) {
@@ -255,18 +265,47 @@ public class CompareLike extends Condition {
         String value = l.getString();
         boolean result;
         if (regexp) {
-            // result = patternRegexp.matcher(value).matches();
             result = patternRegexp.matcher(value).find();
+        } else if (shortcutToStartsWith) {
+            result = value.regionMatches(ignoreCase, 0, patternString, 0, patternLength - 1);
+        } else if (shortcutToEndsWith) {
+            result = value.regionMatches(ignoreCase, value.length() -
+                    patternLength + 1, patternString, 1, patternLength - 1);
+        } else if (shortcutToContains) {
+            String p = patternString.substring(1, patternString.length() - 1);
+            if (ignoreCase) {
+                result = containsIgnoreCase(value, p);
+            } else {
+                result = value.contains(p);
+            }
         } else {
             result = compareAt(value, 0, 0, value.length(), patternChars, patternTypes);
         }
         return ValueBoolean.get(result);
     }
 
-    private boolean compare(char[] pattern, String s, int pi, int si) {
-        return pattern[pi] == s.charAt(si) ||
-                (!fastCompare && compareMode.equalsChars(patternString, pi, s,
-                        si, ignoreCase));
+    private static boolean containsIgnoreCase(String src, String what) {
+        final int length = what.length();
+        if (length == 0) {
+            // Empty string is contained
+            return true;
+        }
+
+        final char firstLo = Character.toLowerCase(what.charAt(0));
+        final char firstUp = Character.toUpperCase(what.charAt(0));
+
+        for (int i = src.length() - length; i >= 0; i--) {
+            // Quick check before calling the more expensive regionMatches()
+            final char ch = src.charAt(i);
+            if (ch != firstLo && ch != firstUp) {
+                continue;
+            }
+            if (src.regionMatches(true, i, what, 0, length)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean compareAt(String s, int pi, int si, int sLen,
@@ -296,10 +335,16 @@ public class CompareLike extends Condition {
                 }
                 return false;
             default:
-                DbException.throwInternalError();
+                DbException.throwInternalError("" + types[pi]);
             }
         }
         return si == sLen;
+    }
+
+    private boolean compare(char[] pattern, String s, int pi, int si) {
+        return pattern[pi] == s.charAt(si) ||
+                (!fastCompare && compareMode.equalsChars(patternString, pi, s,
+                        si, ignoreCase));
     }
 
     /**
@@ -378,6 +423,43 @@ public class CompareLike extends Condition {
             }
         }
         patternString = new String(patternChars, 0, patternLength);
+
+        // optimizes the common case of LIKE 'foo%'
+        if (compareMode.getName().equals(CompareMode.OFF) && patternLength > 1) {
+            int maxMatch = 0;
+            while (maxMatch < patternLength && patternTypes[maxMatch] == MATCH) {
+                maxMatch++;
+            }
+            if (maxMatch == patternLength - 1 && patternTypes[patternLength - 1] == ANY) {
+                shortcutToStartsWith = true;
+                return;
+            }
+        }
+        // optimizes the common case of LIKE '%foo'
+        if (compareMode.getName().equals(CompareMode.OFF) && patternLength > 1) {
+            if (patternTypes[0] == ANY) {
+                int maxMatch = 1;
+                while (maxMatch < patternLength && patternTypes[maxMatch] == MATCH) {
+                    maxMatch++;
+                }
+                if (maxMatch == patternLength) {
+                    shortcutToEndsWith = true;
+                    return;
+                }
+            }
+        }
+        // optimizes the common case of LIKE '%foo%'
+        if (compareMode.getName().equals(CompareMode.OFF) && patternLength > 2) {
+            if (patternTypes[0] == ANY) {
+                int maxMatch = 1;
+                while (maxMatch < patternLength && patternTypes[maxMatch] == MATCH) {
+                    maxMatch++;
+                }
+                if (maxMatch == patternLength - 1 && patternTypes[patternLength - 1] == ANY) {
+                    shortcutToContains = true;
+                }
+            }
+        }
     }
 
     private boolean isFullMatch() {

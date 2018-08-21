@@ -38,7 +38,7 @@ public abstract class TestBase {
         // prop.setProperty("MVCC", "true");
 
         // prop.setProperty("MODE", "DB2"); //支持SYSDUMMY1
-
+        prop.setProperty("MULTI_THREADED", "true");
     }
 
     public Connection getConnection() throws Exception {
@@ -96,6 +96,7 @@ public abstract class TestBase {
             // System.out.println(rs.getString(1) + " " + rs.getString(2) + " " + rs.getString(3) + " " +
             // rs.getString(4));
         }
+        System.out.println();
     }
 
     public void printResultSet(ResultSet rs) throws Exception {

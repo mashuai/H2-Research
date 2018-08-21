@@ -17,9 +17,12 @@ import java.util.ArrayList;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
+
 import org.h2.api.DatabaseEventListener;
 import org.h2.api.ErrorCode;
 import org.h2.result.Row;
+import org.h2.result.RowImpl;
 import org.h2.store.Page;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
@@ -49,6 +52,9 @@ public class TestPageStore extends TestBase {
 
     @Override
     public void test() throws Exception {
+        if (config.memory) {
+            return;
+        }
         deleteDb(null);
         testDropTempTable();
         testLogLimitFalsePositive();
@@ -134,7 +140,7 @@ public class TestPageStore extends TestBase {
         InputStream in = FileUtils.newInputStream(getBaseDir() +
                 "/pageStoreLogLimit.trace.db");
         String s = IOUtils.readStringAndClose(new InputStreamReader(in), -1);
-        assertTrue(s.indexOf("Transaction log could not be truncated") > 0);
+        assertContains(s, "Transaction log could not be truncated");
         conn.commit();
         ResultSet rs = stat2.executeQuery("select * from test");
         assertTrue(rs.next());
@@ -227,7 +233,7 @@ public class TestPageStore extends TestBase {
     }
 
     private void testDefrag() throws SQLException {
-        if (config.reopen) {
+        if (config.reopen || config.multiThreaded) {
             return;
         }
         deleteDb("pageStoreDefrag");
@@ -272,14 +278,14 @@ public class TestPageStore extends TestBase {
 
     private void testInsertDelete() {
         Row[] x = new Row[0];
-        Row r = new Row(null, 0);
+        Row r = new RowImpl(null, 0);
         x = Page.insert(x, 0, 0, r);
         assertTrue(x[0] == r);
-        Row r2 = new Row(null, 0);
+        Row r2 = new RowImpl(null, 0);
         x = Page.insert(x, 1, 0, r2);
         assertTrue(x[0] == r2);
         assertTrue(x[1] == r);
-        Row r3 = new Row(null, 0);
+        Row r3 = new RowImpl(null, 0);
         x = Page.insert(x, 2, 1, r3);
         assertTrue(x[0] == r2);
         assertTrue(x[1] == r3);
@@ -303,13 +309,13 @@ public class TestPageStore extends TestBase {
         stat.execute("set max_log_size 1");
         conn.setAutoCommit(false);
         stat.execute("insert into test select space(1000) from system_range(1, 1000)");
-        long before = System.currentTimeMillis();
+        long before = System.nanoTime();
         stat.execute("select nextval('SEQ') from system_range(1, 100000)");
-        long after = System.currentTimeMillis();
+        long after = System.nanoTime();
         // it's hard to test - basically it shouldn't checkpoint too often
-        if (after - before > 20000) {
+        if (after - before > TimeUnit.SECONDS.toNanos(20)) {
             if (!config.reopen) {
-                fail("Checkpoint took " + (after - before) + " ms");
+                fail("Checkpoint took " + TimeUnit.NANOSECONDS.toMillis(after - before) + " ms");
             }
         }
         stat.execute("drop table test");

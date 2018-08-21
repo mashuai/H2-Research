@@ -3,6 +3,18 @@
 -- Initial Developer: H2 Group
 --
 --- special grammar and test cases ---------------------------------------------------------------------------------------------
+create table test(id int) as select 1;
+> ok
+
+select * from test where id in (select id from test order by 'x');
+> ID
+> --
+> 1
+> rows (ordered): 1
+
+drop table test;
+> ok
+
 select abs(cast(0.0 as double)) x;
 > X
 > ---
@@ -62,7 +74,7 @@ LIMIT 2 )
 AND studentID = 2;
 > SUM(POINTS)
 > -----------
-> null
+> 30
 > rows (ordered): 1
 
 SELECT eventID X FROM RESULTS
@@ -153,6 +165,9 @@ drop table test;
 > ok
 
 call regexp_replace('x', 'x', '\');
+> exception
+
+call select 1 from dual where regexp_like('x', 'x', '\');
 > exception
 
 select * from dual where x = x + 1 or x in(2, 0);
@@ -407,14 +422,14 @@ select * from dual where cast('xx' as varchar_ignorecase(1)) = 'X' and cast('x x
 
 explain select -cast(0 as real), -cast(0 as double);
 > PLAN
-> --------------------------------------------------------------------------------------------
-> SELECT -CAST(0 AS REAL), -CAST(0 AS DOUBLE) FROM SYSTEM_RANGE(1, 1) /* PUBLIC.RANGE_INDEX */
+> ----------------------------------------------------------------
+> SELECT 0.0, 0.0 FROM SYSTEM_RANGE(1, 1) /* PUBLIC.RANGE_INDEX */
 > rows: 1
 
 select -cast(0 as double) nz;
 > NZ
-> ----
-> -0.0
+> ---
+> 0.0
 > rows: 1
 
 select () empty;
@@ -1793,8 +1808,8 @@ explain select * from (select dir_num, count(*) as cnt from multi_pages  t, b_ho
 where t.bh_id=bh.id and bh.site='Hello' group by dir_num) as x
 where cnt < 1000 order by dir_num asc;
 > PLAN
-> ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-> SELECT X.DIR_NUM, X.CNT FROM ( SELECT DIR_NUM, COUNT(*) AS CNT FROM PUBLIC.MULTI_PAGES T /* PUBLIC.MULTI_PAGES.tableScan */ INNER JOIN PUBLIC.B_HOLDING BH /* PUBLIC.PRIMARY_KEY_3: ID = T.BH_ID */ ON 1=1 WHERE (BH.SITE = 'Hello') AND (T.BH_ID = BH.ID) GROUP BY DIR_NUM ) X /* SELECT DIR_NUM, COUNT(*) AS CNT FROM PUBLIC.MULTI_PAGES T /++ PUBLIC.MULTI_PAGES.tableScan ++/ INNER JOIN PUBLIC.B_HOLDING BH /++ PUBLIC.PRIMARY_KEY_3: ID = T.BH_ID ++/ ON 1=1 WHERE (BH.SITE = 'Hello') AND (T.BH_ID = BH.ID) GROUP BY DIR_NUM HAVING COUNT(*) <= ?1: CNT < 1000 */ WHERE CNT < 1000 ORDER BY 1
+> ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+> SELECT X.DIR_NUM, X.CNT FROM ( SELECT DIR_NUM, COUNT(*) AS CNT FROM PUBLIC.MULTI_PAGES T INNER JOIN PUBLIC.B_HOLDING BH ON 1=1 WHERE (BH.SITE = 'Hello') AND (T.BH_ID = BH.ID) GROUP BY DIR_NUM ) X /* SELECT DIR_NUM, COUNT(*) AS CNT FROM PUBLIC.MULTI_PAGES T /++ PUBLIC.MULTI_PAGES.tableScan ++/ INNER JOIN PUBLIC.B_HOLDING BH /++ PUBLIC.PRIMARY_KEY_3: ID = T.BH_ID ++/ ON 1=1 WHERE (BH.SITE = 'Hello') AND (T.BH_ID = BH.ID) GROUP BY DIR_NUM HAVING COUNT(*) <= ?1: CNT < 1000 */ WHERE CNT < 1000 ORDER BY 1
 > rows (ordered): 1
 
 select dir_num, count(*) as cnt from multi_pages  t, b_holding bh
@@ -2098,6 +2113,23 @@ CALL REGEXP_REPLACE('abckaboooom', 'o+', 'o');
 > 'abckabom'
 > ----------
 > abckabom
+> rows: 1
+
+select x from dual where REGEXP_LIKE('A', '[a-z]', 'i');
+> X
+> -
+> 1
+> rows: 1
+
+select x from dual where REGEXP_LIKE('A', '[a-z]', 'c');
+> X
+> -
+> rows: 0
+
+select regexp_replace('Sylvain', 'S..', 'TOTO', 'mni') as X;
+> X
+> --------
+> TOTOvain
 > rows: 1
 
 SELECT 'Hello' ~ 'He.*' T1, 'HELLO' ~ 'He.*' F2, CAST('HELLO' AS VARCHAR_IGNORECASE) ~ 'He.*' T3;
@@ -2979,6 +3011,12 @@ CREATE memory TABLE ADDRESS(ID INT);
 alter view address_view recompile;
 > ok
 
+alter view if exists address_view recompile;
+> ok
+
+alter view if exists does_not_exist recompile;
+> ok
+
 select * from ADDRESS_VIEW;
 > ID
 > --
@@ -3016,6 +3054,13 @@ select min(8=bitand(12, PARSE_INT2(SUBSTRING(random_uuid(), 20,1), 16))) from sy
 > ---------------------------------------------------------------------------
 > TRUE
 > rows: 1
+
+select BITGET(x, 0) AS IS_SET from system_range(1, 2);
+> IS_SET
+> ------
+> FALSE
+> TRUE
+> rows: 2
 
 drop alias PARSE_INT2;
 > ok
@@ -3813,8 +3858,8 @@ inner join test2 on test1.id=test2.id left
 outer join test3 on test2.id=test3.id
 where test3.id is null;
 > PLAN
-> -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-> SELECT TEST1.ID, TEST2.ID, TEST3.ID FROM PUBLIC.TEST1 /* PUBLIC.TEST1.tableScan */ INNER JOIN PUBLIC.TEST2 /* PUBLIC.PRIMARY_KEY_4C: ID = TEST1.ID AND ID = TEST1.ID */ ON 1=1 /* WHERE TEST1.ID = TEST2.ID */ LEFT OUTER JOIN PUBLIC.TEST3 /* PUBLIC.PRIMARY_KEY_4C0: ID = TEST2.ID */ ON TEST2.ID = TEST3.ID WHERE (TEST3.ID IS NULL) AND (TEST1.ID = TEST2.ID)
+> --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+> SELECT TEST1.ID, TEST2.ID, TEST3.ID FROM PUBLIC.TEST2 /* PUBLIC.TEST2.tableScan */ LEFT OUTER JOIN PUBLIC.TEST3 /* PUBLIC.PRIMARY_KEY_4C0: ID = TEST2.ID */ ON TEST2.ID = TEST3.ID INNER JOIN PUBLIC.TEST1 /* PUBLIC.PRIMARY_KEY_4: ID = TEST2.ID */ ON 1=1 WHERE (TEST3.ID IS NULL) AND (TEST1.ID = TEST2.ID)
 > rows: 1
 
 insert into test1 select x from system_range(2, 1000);
@@ -3950,6 +3995,12 @@ SELECT DATEDIFF('HOUR', '1900-01-01 01:00:00.001', '1900-01-01 01:00:01.000'), D
 > 0 0
 > - -
 > 0 0
+> rows: 1
+
+select datediff(day, '2015-12-09 23:59:00.0', '2016-01-16 23:59:00.0'), datediff(wk, '2015-12-09 23:59:00.0', '2016-01-16 23:59:00.0');
+> 38 5
+> -- -
+> 38 5
 > rows: 1
 
 create table test(id int);
@@ -4434,7 +4485,31 @@ create index if not exists idx_id on s.test(id);
 create index if not exists idx_id on s.test(id);
 > ok
 
-alter index s.idx_id rename to s.index_id;
+alter index s.idx_id rename to s.x;
+> ok
+
+alter index if exists s.idx_id rename to s.x;
+> ok
+
+alter index if exists s.x rename to s.index_id;
+> ok
+
+alter sequence if exists s.seq restart with 10;
+> ok
+
+create sequence s.seq cache 0;
+> ok
+
+alter sequence if exists s.seq restart with 3;
+> ok
+
+select s.seq.nextval as x;
+> X
+> -
+> 3
+> rows: 1
+
+drop sequence s.seq;
 > ok
 
 create sequence s.seq cache 0;
@@ -4496,7 +4571,7 @@ create index idx_n_id on test(name, id);
 alter table test add constraint abc foreign key(id) references (id);
 > ok
 
-alter table test alter column id rename to i;
+alter table test rename column id to i;
 > ok
 
 script NOPASSWORDS NOSETTINGS drop;
@@ -4836,6 +4911,22 @@ SELECT group_concat(name) FROM TEST group by id;
 > Hello
 > World
 > rows: 2
+
+drop table test;
+> ok
+
+create table test(a int primary key, b int invisible, c int);
+> ok
+
+select * from test;
+> A C
+> - -
+> rows: 0
+
+select a, b, c from test;
+> A B C
+> - - -
+> rows: 0
 
 drop table test;
 > ok
@@ -6108,6 +6199,49 @@ SELECT * FROM TEST;
 DROP TABLE TEST;
 > ok
 
+create table test(id int, name varchar invisible);
+> ok
+
+select * from test;
+> ID
+> --
+> rows: 0
+
+alter table test alter column name set visible;
+> ok
+
+select * from test;
+> ID NAME
+> -- ----
+> rows: 0
+
+alter table test add modify_date timestamp invisible before name;
+> ok
+
+select * from test;
+> ID NAME
+> -- ----
+> rows: 0
+
+alter table test alter column modify_date timestamp visible;
+> ok
+
+select * from test;
+> ID MODIFY_DATE NAME
+> -- ----------- ----
+> rows: 0
+
+alter table test alter column modify_date set invisible;
+> ok
+
+select * from test;
+> ID NAME
+> -- ----
+> rows: 0
+
+drop table test;
+> ok
+
 --- autoIncrement ----------------------------------------------------------------------------------------------
 CREATE MEMORY TABLE TEST(ID INT PRIMARY KEY, NAME VARCHAR);
 > ok
@@ -6190,6 +6324,12 @@ SELECT * FROM TEST UNION ALL SELECT * FROM TEST ORDER BY ID LIMIT 2+0 OFFSET 1+0
 > 1  Hello
 > 2  World
 > rows (ordered): 2
+
+SELECT * FROM TEST ORDER BY ID OFFSET 4;
+> ID NAME
+> -- ---------
+> 5  resources
+> rows (ordered): 1
 
 SELECT ID FROM TEST GROUP BY ID UNION ALL SELECT ID FROM TEST GROUP BY ID;
 > ID
@@ -6814,6 +6954,9 @@ SELECT A.ID AID, A.NAME A_NAME, B.ID BID, B.NAME B_NAME FROM TEST_A A INNER JOIN
 > --- ------ --- ------
 > rows: 0
 
+INSERT INTO TEST_B VALUES(1, 'Hallo'), (2, 'Welt'), (3, 'Rekord');
+> update count: 3
+
 CREATE VIEW IF NOT EXISTS TEST_ALL AS SELECT A.ID AID, A.NAME A_NAME, B.ID BID, B.NAME B_NAME FROM TEST_A A, TEST_B B WHERE A.ID = B.ID;
 > ok
 
@@ -6827,23 +6970,8 @@ CREATE VIEW IF NOT EXISTS TEST_ALL AS
 SELECT * FROM TEST_A;
 > ok
 
-INSERT INTO TEST_A VALUES(1, 'Hello');
-> update count: 1
-
-INSERT INTO TEST_B VALUES(1, 'Hallo');
-> update count: 1
-
-INSERT INTO TEST_A VALUES(2, 'World');
-> update count: 1
-
-INSERT INTO TEST_B VALUES(2, 'Welt');
-> update count: 1
-
-INSERT INTO TEST_A VALUES(3, 'Record');
-> update count: 1
-
-INSERT INTO TEST_B VALUES(3, 'Rekord');
-> update count: 1
+INSERT INTO TEST_A VALUES(1, 'Hello'), (2, 'World'), (3, 'Record');
+> update count: 3
 
 SELECT * FROM TEST_ALL;
 > AID A_NAME BID B_NAME
@@ -6892,9 +7020,9 @@ CREATE VIEW TEST_A_SUB AS SELECT * FROM TEST_A WHERE ID < 2;
 
 SELECT TABLE_NAME, SQL FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='VIEW';
 > TABLE_NAME SQL
-> ---------- --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-> TEST_ALL   CREATE FORCE VIEW PUBLIC.TEST_ALL(AID, A_NAME, BID, B_NAME) AS SELECT A.ID AS AID, A.NAME AS A_NAME, B.ID AS BID, B.NAME AS B_NAME FROM PUBLIC.TEST_A A /* PUBLIC.TEST_A.tableScan */ INNER JOIN PUBLIC.TEST_B B /* PUBLIC.PRIMARY_KEY_93: ID = A.ID */ ON 1=1 WHERE A.ID = B.ID
-> TEST_A_SUB CREATE FORCE VIEW PUBLIC.TEST_A_SUB(ID, NAME) AS SELECT TEST_A.ID, TEST_A.NAME FROM PUBLIC.TEST_A /* PUBLIC.PRIMARY_KEY_9: ID < 2 */ WHERE ID < 2
+> ---------- -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+> TEST_ALL   CREATE FORCE VIEW PUBLIC.TEST_ALL(AID, A_NAME, BID, B_NAME) AS SELECT A.ID AS AID, A.NAME AS A_NAME, B.ID AS BID, B.NAME AS B_NAME FROM PUBLIC.TEST_A A INNER JOIN PUBLIC.TEST_B B ON 1=1 WHERE A.ID = B.ID
+> TEST_A_SUB CREATE FORCE VIEW PUBLIC.TEST_A_SUB(ID, NAME) AS SELECT TEST_A.ID, TEST_A.NAME FROM PUBLIC.TEST_A WHERE ID < 2
 > rows: 2
 
 SELECT * FROM TEST_A_SUB WHERE NAME IS NOT NULL;
@@ -7308,6 +7436,17 @@ SELECT * FROM TEST WHERE NAME LIKE 'Hello%';
 > -- -----
 > 1  Hello
 > rows: 1
+
+SELECT * FROM TEST WHERE NAME ILIKE 'hello%';
+> ID NAME
+> -- -----
+> 1  Hello
+> rows: 1
+
+SELECT * FROM TEST WHERE NAME ILIKE 'xxx%';
+> ID NAME
+> -- ----
+> rows: 0
 
 SELECT * FROM TEST WHERE NAME LIKE 'Wo%';
 > ID NAME
@@ -7927,7 +8066,7 @@ SELECT ID++0, -X1, -XT, -X_SM, -XB, -XD, -XD2, -XR FROM TEST;
 > ID + 0 - X1  - XT - X_SM - XB - XD  - XD2 - XR
 > ------ ----- ---- ------ ---- ----- ----- ----
 > -1     TRUE  1    1      1    1.00  1.0   1.0
-> 0      TRUE  0    0      0    0.00  -0.0  -0.0
+> 0      TRUE  0    0      0    0.00  0.0   0.0
 > 1      FALSE -1   -1     -1   -1.00 -1.0  -1.0
 > 4      FALSE -4   -4     -4   -4.00 -4.0  -4.0
 > null   null  null null   null null  null  null
@@ -8092,9 +8231,9 @@ select * from s;
 > rows: 1
 
 select some(y>10), every(y>10), min(y), max(y) from t;
-> BOOL_OR(Y > 10) BOOL_AND(Y > 10) MIN(Y) MAX(Y)
-> --------------- ---------------- ------ ------
-> null            null             null   null
+> BOOL_OR(Y > 10.0) BOOL_AND(Y > 10.0) MIN(Y) MAX(Y)
+> ----------------- ------------------ ------ ------
+> null              null               null   null
 > rows: 1
 
 insert into t values(1000000004, 4);
@@ -8150,9 +8289,9 @@ stddev_pop(distinct y) s_py, stddev_samp(distinct y) s_sy, var_pop(distinct y) v
 > rows: 1
 
 select some(y>10), every(y>10), min(y), max(y) from t;
-> BOOL_OR(Y > 10) BOOL_AND(Y > 10) MIN(Y) MAX(Y)
-> --------------- ---------------- ------ ------
-> TRUE            FALSE            4.0    16.0
+> BOOL_OR(Y > 10.0) BOOL_AND(Y > 10.0) MIN(Y) MAX(Y)
+> ----------------- ------------------ ------ ------
+> TRUE              FALSE              4.0    16.0
 > rows: 1
 
 drop view s;
@@ -10169,3 +10308,456 @@ create table test(id int, name varchar);
 insert into test values(5, 'b'), (5, 'b'), (20, 'a');
 > update count: 3
 
+drop table test;
+> ok
+
+select 0 from ((
+    select 0 as f from dual u1 where null in (?, ?, ?, ?, ?)
+) union all (
+    select u2.f from (
+        select 0 as f from (
+            select 0 from dual u2f1f1 where now() = ?
+        ) u2f1
+    ) u2
+)) where f = 12345;
+{
+11, 22, 33, 44, 55, null
+> 0
+> -
+> rows: 0
+};
+> update count: 0
+
+explain with recursive r(n) as (
+    (select 1) union all (select n+1 from r where n < 3)
+)
+select n from r;
+> PLAN
+> -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+> WITH RECURSIVE R(N) AS ( (SELECT 1 FROM SYSTEM_RANGE(1, 1) /* PUBLIC.RANGE_INDEX */) UNION ALL (SELECT (N + 1) FROM PUBLIC.R /* PUBLIC.R.tableScan */ WHERE N < 3) ) SELECT N FROM R /* null */
+> rows: 1
+
+select sum(n) from (
+    with recursive r(n) as (
+        (select 1) union all (select n+1 from r where n < 3)
+    )
+    select n from r
+);
+> SUM(N)
+> ------
+> 6
+> rows: 1
+
+select sum(n) from (select 0) join (
+    with recursive r(n) as (
+        (select 1) union all (select n+1 from r where n < 3)
+    )
+    select n from r
+) on 1=1;
+> SUM(N)
+> ------
+> 6
+> rows: 1
+
+select 0 from (
+    select 0 where 0 in (
+        with recursive r(n) as (
+            (select 1) union all (select n+1 from r where n < 3)
+        )
+        select n from r
+    )
+);
+> 0
+> -
+> rows: 0
+
+create table x(id int not null);
+> ok
+
+alter table if exists y add column a varchar;
+> ok
+
+alter table if exists x add column a varchar;
+> ok
+
+alter table if exists x add column a varchar;
+> exception
+
+alter table if exists y alter column a rename to b;
+> ok
+
+alter table if exists x alter column a rename to b;
+> ok
+
+alter table if exists x alter column a rename to b;
+> exception
+
+alter table if exists y alter column b set default 'a';
+> ok
+
+alter table if exists x alter column b set default 'a';
+> ok
+
+insert into x(id) values(1);
+> update count: 1
+
+select b from x;
+> B
+> -
+> a
+> rows: 1
+
+delete from x;
+> update count: 1
+
+alter table if exists y alter column b drop default;
+> ok
+
+alter table if exists x alter column b drop default;
+> ok
+
+alter table if exists y alter column b set not null;
+> ok
+
+alter table if exists x alter column b set not null;
+> ok
+
+insert into x(id) values(1);
+> exception
+
+alter table if exists y alter column b drop not null;
+> ok
+
+alter table if exists x alter column b drop not null;
+> ok
+
+insert into x(id) values(1);
+> update count: 1
+
+select b from x;
+> B
+> ----
+> null
+> rows: 1
+
+delete from x;
+> update count: 1
+
+alter table if exists y add constraint x_pk primary key (id);
+> ok
+
+alter table if exists x add constraint x_pk primary key (id);
+> ok
+
+alter table if exists x add constraint x_pk primary key (id);
+> exception
+
+insert into x(id) values(1);
+> update count: 1
+
+insert into x(id) values(1);
+> exception
+
+delete from x;
+> update count: 1
+
+alter table if exists y add constraint x_check check (b = 'a');
+> ok
+
+alter table if exists x add constraint x_check check (b = 'a');
+> ok
+
+alter table if exists x add constraint x_check check (b = 'a');
+> exception
+
+insert into x(id, b) values(1, 'b');
+> exception
+
+alter table if exists y rename constraint x_check to x_check1;
+> ok
+
+alter table if exists x rename constraint x_check to x_check1;
+> ok
+
+alter table if exists x rename constraint x_check to x_check1;
+> exception
+
+alter table if exists y drop constraint x_check1;
+> ok
+
+alter table if exists x drop constraint x_check1;
+> ok
+
+alter table if exists y rename to z;
+> ok
+
+alter table if exists x rename to z;
+> ok
+
+alter table if exists x rename to z;
+> ok
+
+insert into z(id, b) values(1, 'b');
+> update count: 1
+
+delete from z;
+> update count: 1
+
+alter table if exists y add constraint z_uk unique (b);
+> ok
+
+alter table if exists z add constraint z_uk unique (b);
+> ok
+
+alter table if exists z add constraint z_uk unique (b);
+> exception
+
+insert into z(id, b) values(1, 'b');
+> update count: 1
+
+insert into z(id, b) values(1, 'b');
+> exception
+
+delete from z;
+> update count: 1
+
+alter table if exists y drop column b;
+> ok
+
+alter table if exists z drop column b;
+> ok
+
+alter table if exists z drop column b;
+> exception
+
+alter table if exists y drop primary key;
+> ok
+
+alter table if exists z drop primary key;
+> ok
+
+alter table if exists z drop primary key;
+> exception
+
+create table x (id int not null primary key);
+> ok
+
+alter table if exists y add constraint z_fk foreign key (id) references x (id);
+> ok
+
+alter table if exists z add constraint z_fk foreign key (id) references x (id);
+> ok
+
+alter table if exists z add constraint z_fk foreign key (id) references x (id);
+> exception
+
+insert into z (id) values (1);
+> exception
+
+alter table if exists y drop foreign key z_fk;
+> ok
+
+alter table if exists z drop foreign key z_fk;
+> ok
+
+alter table if exists z drop foreign key z_fk;
+> exception
+
+insert into z (id) values (1);
+> update count: 1
+
+delete from z;
+> update count: 1
+
+drop table x;
+> ok
+
+drop table z;
+> ok
+
+create schema x;
+> ok
+
+alter schema if exists y rename to z;
+> ok
+
+alter schema if exists x rename to z;
+> ok
+
+alter schema if exists x rename to z;
+> ok
+
+create table z.z (id int);
+> ok
+
+drop schema z;
+> ok
+
+----------------
+--- ENUM support
+----------------
+
+--- ENUM basic operations
+
+create table card (rank int, suit enum('hearts', 'clubs', 'spades'));
+> ok
+
+insert into card (rank, suit) values (0, 'clubs'), (3, 'hearts');
+> update count: 2
+
+alter table card alter column suit enum('hearts', 'clubs', 'spades', 'diamonds');
+> ok
+
+select * from card;
+> RANK SUIT
+> ---- ------
+> 0    clubs
+> 3    hearts
+
+select * from card order by suit;
+> RANK SUIT
+> ---- ------
+> 3    hearts
+> 0    clubs
+
+insert into card (rank, suit) values (8, 'diamonds'), (10, 'clubs'), (7, 'hearts');
+> update count: 3
+
+select suit, count(rank) from card group by suit order by suit, count(rank);
+> SUIT     COUNT(RANK)
+> -------- -----------
+> hearts   2
+> clubs    2
+> diamonds 1
+
+select rank from card where suit = 'diamonds';
+> RANK
+> ----
+> 8
+
+--- ENUM integer-based operations
+
+select rank from card where suit = 1;
+> RANK
+> ----
+> 0
+> 10
+
+insert into card (rank, suit) values(5, 2);
+> update count: 1
+
+select * from card where rank = 5;
+> RANK SUIT
+> ---- ------
+> 5    spades
+
+--- ENUM edge cases
+
+insert into card (rank, suit) values(6, ' ');
+> exception
+
+alter table card alter column suit enum('hearts', 'clubs', 'spades', 'diamonds', 'clubs');
+> exception
+
+alter table card alter column suit enum('hearts', 'clubs', 'spades', 'diamonds', '');
+> exception
+
+drop table card;
+> ok
+
+--- ENUM as custom user data type
+
+create type CARD_SUIT as enum('hearts', 'clubs', 'spades', 'diamonds');
+> ok
+
+create table card (rank int, suit CARD_SUIT);
+> ok
+
+insert into card (rank, suit) values (0, 'clubs'), (3, 'hearts');
+> update count: 2
+
+select * from card;
+> RANK SUIT
+> ---- ------
+> 0    clubs
+> 3    hearts
+
+drop table card;
+> ok
+
+drop type CARD_SUIT;
+> ok
+
+--- ENUM in primary key with another column
+create type CARD_SUIT as enum('hearts', 'clubs', 'spades', 'diamonds');
+> ok
+
+create table card (rank int, suit CARD_SUIT, primary key(rank, suit));
+> ok
+
+insert into card (rank, suit) values (0, 'clubs'), (3, 'hearts'), (1, 'clubs');
+> update count: 3
+
+insert into card (rank, suit) values (0, 'clubs');
+> exception
+
+select rank from card where suit = 'clubs';
+> RANK
+> ----
+> 0
+> 1
+
+drop table card;
+> ok
+
+drop type CARD_SUIT;
+> ok
+
+--- ENUM with index
+create type CARD_SUIT as enum('hearts', 'clubs', 'spades', 'diamonds');
+> ok
+
+create table card (rank int, suit CARD_SUIT, primary key(rank, suit));
+> ok
+
+insert into card (rank, suit) values (0, 'clubs'), (3, 'hearts'), (1, 'clubs');
+> update count: 3
+
+create index idx_card_suite on card(`suit`);
+
+select rank from card where suit = 'clubs';
+> RANK
+> ----
+> 0
+> 1
+
+select rank from card where suit in ('clubs');
+> RANK
+> ----
+> 0
+> 1
+
+drop table card;
+> ok
+
+drop type CARD_SUIT;
+> ok
+
+----- Issue#493 -----
+create table test (year int, action varchar(10));
+> ok
+
+insert into test values (2015, 'order'), (2016, 'order'), (2014, 'order');
+> update count: 3
+
+insert into test values (2014, 'execution'), (2015, 'execution'), (2016, 'execution');
+> update count: 3
+
+select * from test where year in (select distinct year from test order by year desc limit 1 offset 0);
+> YEAR ACTION
+> ---- ---------
+> 2016 order
+> 2016 execution
+
+drop table test;
+> ok

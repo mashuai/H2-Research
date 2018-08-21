@@ -14,6 +14,7 @@ import java.io.Reader;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import org.h2.engine.Constants;
+import org.h2.engine.Mode;
 import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
 import org.h2.mvstore.DataUtils;
@@ -24,6 +25,7 @@ import org.h2.store.FileStoreOutputStream;
 import org.h2.store.LobStorageFrontend;
 import org.h2.store.LobStorageInterface;
 import org.h2.store.fs.FileUtils;
+import org.h2.table.Column;
 import org.h2.util.IOUtils;
 import org.h2.util.MathUtils;
 import org.h2.util.StringUtils;
@@ -54,6 +56,11 @@ public class ValueLobDb extends Value implements Value.ValueClob,
     private final FileStore tempFile;
     private int tableId;
     private int hash;
+
+    //Arbonaut: 13.07.2016
+    // Fix for recovery tool.
+
+    private boolean isRecoveryReference;
 
     private ValueLobDb(int type, DataHandler handler, int tableId, long lobId,
             byte[] hmac, long precision) {
@@ -92,9 +99,9 @@ public class ValueLobDb extends Value implements Value.ValueClob,
         this.fileName = createTempLobFileName(handler);
         this.tempFile = this.handler.openFile(fileName, "rw", false);
         this.tempFile.autoDelete();
-        FileStoreOutputStream out = new FileStoreOutputStream(tempFile, null, null);
+
         long tmpPrecision = 0;
-        try {
+        try (FileStoreOutputStream out = new FileStoreOutputStream(tempFile, null, null)) {
             char[] buff = new char[Constants.IO_BUFFER_SIZE];
             while (true) {
                 int len = getBufferSize(this.handler, false, remaining);
@@ -102,9 +109,10 @@ public class ValueLobDb extends Value implements Value.ValueClob,
                 if (len == 0) {
                     break;
                 }
+                byte[] data = new String(buff, 0, len).getBytes("UTF-8");
+                out.write(data);
+                tmpPrecision += len;
             }
-        } finally {
-            out.close();
         }
         this.precision = tmpPrecision;
     }
@@ -178,7 +186,7 @@ public class ValueLobDb extends Value implements Value.ValueClob,
      * @return the converted value
      */
     @Override
-    public Value convertTo(int t) {
+    public Value convertTo(int t, int precision, Mode mode, Column column) {
         if (t == type) {
             return this;
         } else if (t == Value.CLOB) {
@@ -198,14 +206,13 @@ public class ValueLobDb extends Value implements Value.ValueClob,
                 return ValueLobDb.createSmallLob(t, small);
             }
         }
-        return super.convertTo(t);
+        return super.convertTo(t, precision, mode, column);
     }
 
     @Override
-    public boolean isLinked() {
-        return tableId != LobStorageFrontend.TABLE_ID_SESSION_VARIABLE &&
-                tableId != LobStorageFrontend.TABLE_RESULT &&
-                small == null;
+    public boolean isLinkedToTable() {
+        return small == null &&
+                tableId >= 0;
     }
 
     public boolean isStored() {
@@ -213,7 +220,7 @@ public class ValueLobDb extends Value implements Value.ValueClob,
     }
 
     @Override
-    public void close() {
+    public void remove() {
         if (fileName != null) {
             if (tempFile != null) {
                 tempFile.stopAutoDelete();
@@ -230,24 +237,10 @@ public class ValueLobDb extends Value implements Value.ValueClob,
     }
 
     @Override
-    public void unlink(DataHandler database) {
-        if (small == null &&
-                tableId != LobStorageFrontend.TABLE_ID_SESSION_VARIABLE) {
-            database.getLobStorage().setTable(this,
-                    LobStorageFrontend.TABLE_ID_SESSION_VARIABLE);
-            tableId = LobStorageFrontend.TABLE_ID_SESSION_VARIABLE;
-        }
-    }
-
-    @Override
-    public Value link(DataHandler database, int tabId) {
+    public Value copy(DataHandler database, int tableId) {
         if (small == null) {
-            if (tableId == LobStorageFrontend.TABLE_TEMP) {
-                database.getLobStorage().setTable(this, tabId);
-                this.tableId = tabId;
-            } else {
-                return handler.getLobStorage().copyLob(this, tabId, getPrecision());
-            }
+            Value v2 = handler.getLobStorage().copyLob(this, tableId, getPrecision());
+            return v2;
         } else if (small.length > database.getMaxLengthInplaceLob()) {
             LobStorageInterface s = database.getLobStorage();
             Value v;
@@ -256,7 +249,9 @@ public class ValueLobDb extends Value implements Value.ValueClob,
             } else {
                 v = s.createClob(getReader(), getPrecision());
             }
-            return v.link(database, tabId);
+            Value v2 = v.copy(database, tableId);
+            v.remove();
+            return v2;
         }
         return this;
     }
@@ -676,4 +671,12 @@ public class ValueLobDb extends Value implements Value.ValueClob,
         return new ValueLobDb(type, small, precision);
     }
 
+
+    public void setRecoveryReference(boolean isRecoveryReference) {
+        this.isRecoveryReference = isRecoveryReference;
+    }
+
+    public boolean isRecoveryReference() {
+        return isRecoveryReference;
+    }
 }

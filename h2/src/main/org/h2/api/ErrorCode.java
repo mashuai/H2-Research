@@ -159,6 +159,44 @@ public class ErrorCode {
      */
     public static final int LIKE_ESCAPE_ERROR_1 = 22025;
 
+    /**
+     * The error with code <code>22030</code> is thrown when
+     * an attempt is made to INSERT or UPDATE an ENUM-typed cell,
+     * but the value is not one of the values enumerated by the
+     * type.
+     *
+     * Example:
+     * <pre>
+     * CREATE TABLE TEST(CASE ENUM('sensitive','insensitive'));
+     * INSERT INTO TEST VALUES('snake');
+     * </pre>
+     */
+    public static final int ENUM_VALUE_NOT_PERMITTED = 22030;
+
+    /**
+     * The error with code <code>22032</code> is thrown when an
+     * attempt is made to add or modify an ENUM-typed column so
+     * that one or more of its enumerators would be empty.
+     *
+     * Example:
+     * <pre>
+     * CREATE TABLE TEST(CASE ENUM(' '));
+     * </pre>
+     */
+    public static final int ENUM_EMPTY = 22032;
+
+    /**
+     * The error with code <code>22033</code> is thrown when an
+     * attempt is made to add or modify an ENUM-typed column so
+     * that it would have duplicate values.
+     *
+     * Example:
+     * <pre>
+     * CREATE TABLE TEST(CASE ENUM('sensitive', 'sensitive'));
+     * </pre>
+     */
+    public static final int ENUM_DUPLICATE = 22033;
+
     // 23: constraint violation
 
     /**
@@ -408,6 +446,18 @@ public class ErrorCode {
     public static final int LOCK_TIMEOUT_1 = 50200;
 
     /**
+     * The error with code <code>57014</code> is thrown when
+     * a statement was canceled using Statement.cancel() or
+     * when the query timeout has been reached.
+     * Examples:
+     * <pre>
+     * stat.setQueryTimeout(1);
+     * stat.cancel();
+     * </pre>
+     */
+    public static final int STATEMENT_WAS_CANCELED = 57014;
+
+    /**
      * The error with code <code>90000</code> is thrown when
      * a function that does not return a result set was used in the FROM clause.
      * Example:
@@ -490,16 +540,6 @@ public class ErrorCode {
      * </pre>
      */
     public static final int INVALID_VALUE_2 = 90008;
-
-    /**
-     * The error with code <code>90051</code> is thrown when
-     * trying to use a scale that is > precision.
-     * Example:
-     * <pre>
-     * CREATE TABLE TABLE1 ( FAIL NUMBER(6,24) );
-     * </pre>
-     */
-    public static final int INVALID_VALUE_SCALE_PRECISION = 90051;
 
     /**
      * The error with code <code>90009</code> is thrown when
@@ -937,16 +977,14 @@ public class ErrorCode {
     public static final int WRONG_PASSWORD_FORMAT = 90050;
 
     /**
-     * The error with code <code>57014</code> is thrown when
-     * a statement was canceled using Statement.cancel() or
-     * when the query timeout has been reached.
-     * Examples:
+     * The error with code <code>90051</code> is thrown when
+     * trying to use a scale that is > precision.
+     * Example:
      * <pre>
-     * stat.setQueryTimeout(1);
-     * stat.cancel();
+     * CREATE TABLE TABLE1 ( FAIL NUMBER(6,24) );
      * </pre>
      */
-    public static final int STATEMENT_WAS_CANCELED = 57014;
+    public static final int INVALID_VALUE_SCALE_PRECISION = 90051;
 
     /**
      * The error with code <code>90052</code> is thrown when
@@ -1000,6 +1038,12 @@ public class ErrorCode {
      * </pre>
      */
     public static final int UNSUPPORTED_CIPHER = 90055;
+
+    /**
+    * The error with code <code>90056</code> is thrown when trying to format a
+    * timestamp using TO_DATE and TO_TIMESTAMP  with an invalid format.
+    */
+    public static final int INVALID_TO_DATE_FORMAT = 90056;
 
     /**
      * The error with code <code>90057</code> is thrown when
@@ -1358,7 +1402,7 @@ public class ErrorCode {
 
     /**
      * The error with code <code>90087</code> is thrown when
-     * the specified method was not found in the class.
+     * a method with matching number of arguments was not found in the class.
      * Example:
      * <pre>
      * CREATE ALIAS TO_BINARY FOR "java.lang.Long.toBinaryString(long)";
@@ -1663,7 +1707,7 @@ public class ErrorCode {
      * DROP TABLE INFORMATION_SCHEMA.SETTINGS;
      * </pre>
      */
-    public static final int CANNOT_DROP_TABLE_1  = 90118;
+    public static final int CANNOT_DROP_TABLE_1 = 90118;
 
     /**
      * The error with code <code>90119</code> is thrown when
@@ -1908,7 +1952,6 @@ public class ErrorCode {
      */
     public static final int RESULT_SET_READONLY = 90140;
 
-
     /**
      * The error with code <code>90141</code> is thrown when
      * trying to change the java object serializer while there was already data
@@ -1923,8 +1966,14 @@ public class ErrorCode {
      */
     public static final int STEP_SIZE_MUST_NOT_BE_ZERO = 90142;
 
+    /**
+     * The error with code <code>90143</code> is thrown when
+     * trying to fetch a row from the primary index and the row is not there.
+     * Can happen in MULTI_THREADED=1 case.
+     */
+    public static final int ROW_NOT_FOUND_IN_PRIMARY_INDEX = 90143;
 
-    // next are 90056, 90110, 90122, 90143
+    // next are 90110, 90122, 90144
 
     private ErrorCode() {
         // utility class

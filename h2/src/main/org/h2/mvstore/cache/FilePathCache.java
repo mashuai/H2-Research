@@ -10,12 +10,25 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import org.h2.store.fs.FileBase;
+import org.h2.store.fs.FilePath;
 import org.h2.store.fs.FilePathWrapper;
 
 /**
  * A file with a read cache.
  */
 public class FilePathCache extends FilePathWrapper {
+
+    /**
+     * The instance.
+     */
+    public static final FilePathCache INSTANCE = new FilePathCache();
+
+    /**
+     * Register the file system.
+     */
+    static {
+        FilePath.register(INSTANCE);
+    }
 
     public static FileChannel wrap(FileChannel f) {
         return new FileCache(f);
@@ -38,9 +51,15 @@ public class FilePathCache extends FilePathWrapper {
 
         private static final int CACHE_BLOCK_SIZE = 4 * 1024;
         private final FileChannel base;
-        // 1 MB cache size
-        private final CacheLongKeyLIRS<ByteBuffer> cache =
-                new CacheLongKeyLIRS<ByteBuffer>(1024 * 1024);
+
+        private final CacheLongKeyLIRS<ByteBuffer> cache;
+
+        {
+            CacheLongKeyLIRS.Config cc = new CacheLongKeyLIRS.Config();
+            // 1 MB cache size
+            cc.maxMemory = 1024 * 1024;
+            cache = new CacheLongKeyLIRS<ByteBuffer>(cc);
+        }
 
         FileCache(FileChannel base) {
             this.base = base;
@@ -68,7 +87,7 @@ public class FilePathCache extends FilePathWrapper {
         }
 
         @Override
-        public int read(ByteBuffer dst, long position) throws IOException {
+        public synchronized int read(ByteBuffer dst, long position) throws IOException {
             long cachePos = getCachePos(position);
             int off = (int) (position - cachePos);
             int len = CACHE_BLOCK_SIZE - off;
@@ -111,20 +130,20 @@ public class FilePathCache extends FilePathWrapper {
         }
 
         @Override
-        public FileChannel truncate(long newSize) throws IOException {
+        public synchronized FileChannel truncate(long newSize) throws IOException {
             cache.clear();
             base.truncate(newSize);
             return this;
         }
 
         @Override
-        public int write(ByteBuffer src, long position) throws IOException {
+        public synchronized int write(ByteBuffer src, long position) throws IOException {
             clearCache(src, position);
             return base.write(src, position);
         }
 
         @Override
-        public int write(ByteBuffer src) throws IOException {
+        public synchronized int write(ByteBuffer src) throws IOException {
             clearCache(src, position());
             return base.write(src);
         }

@@ -12,6 +12,7 @@ import java.io.Reader;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.CallableStatement;
+import java.sql.ClientInfoStatus;
 import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -26,13 +27,17 @@ import java.sql.Savepoint;
 import java.sql.Statement;
 import java.sql.Struct;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
-
+import java.util.concurrent.Executor;
+import java.util.regex.Pattern;
 import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.engine.ConnectionInfo;
 import org.h2.engine.Constants;
+import org.h2.engine.Mode;
 import org.h2.engine.SessionInterface;
 import org.h2.engine.SessionRemote;
 import org.h2.engine.SysProperties;
@@ -43,14 +48,11 @@ import org.h2.util.CloseWatcher;
 import org.h2.util.JdbcUtils;
 import org.h2.util.Utils;
 import org.h2.value.CompareMode;
+import org.h2.value.DataType;
 import org.h2.value.Value;
 import org.h2.value.ValueInt;
 import org.h2.value.ValueNull;
 import org.h2.value.ValueString;
-
-//## Java 1.7 ##
-import java.util.concurrent.Executor;
-//*/
 
 /**
  * <p>
@@ -62,7 +64,11 @@ import java.util.concurrent.Executor;
  * connection should only be used in one thread at any time.
  * </p>
  */
-public class JdbcConnection extends TraceObject implements Connection {
+public class JdbcConnection extends TraceObject implements Connection,
+        JdbcConnectionBackwardsCompat {
+
+    private static final String NUM_SERVERS = "numServers";
+    private static final String PREFIX_SERVER = "server";
 
     private static boolean keepOpenStackTrace;
 
@@ -83,6 +89,9 @@ public class JdbcConnection extends TraceObject implements Connection {
     private Statement executingStatement;
     private final CloseWatcher watcher;
     private int queryTimeoutCache = -1;
+
+    private Map<String, String> clientInfo;
+    private String mode;
 
     /**
      * INTERNAL
@@ -140,6 +149,9 @@ public class JdbcConnection extends TraceObject implements Connection {
         this.getReadOnly = clone.getReadOnly;
         this.rollback = clone.rollback;
         this.watcher = null;
+        if (clone.clientInfo != null) {
+            this.clientInfo = new HashMap<String, String>(clone.clientInfo);
+        }
     }
 
     /**
@@ -700,7 +712,7 @@ public class JdbcConnection extends TraceObject implements Connection {
             debugCodeCall("setTransactionIsolation", level);
             checkClosed();
             int lockMode;
-            switch(level) {
+            switch (level) {
             case Connection.TRANSACTION_READ_UNCOMMITTED:
                 lockMode = Constants.LOCK_MODE_OFF;
                 break;
@@ -786,7 +798,7 @@ public class JdbcConnection extends TraceObject implements Connection {
             int lockMode = result.currentRow()[0].getInt();
             result.close();
             int transactionIsolationLevel;
-            switch(lockMode) {
+            switch (lockMode) {
             case Constants.LOCK_MODE_OFF:
                 transactionIsolationLevel = Connection.TRANSACTION_READ_UNCOMMITTED;
                 break;
@@ -869,7 +881,9 @@ public class JdbcConnection extends TraceObject implements Connection {
     @Override
     public void setTypeMap(Map<String, Class<?>> map) throws SQLException {
         try {
-            debugCode("setTypeMap(" + quoteMap(map) + ");");
+            if (isDebugEnabled()) {
+                debugCode("setTypeMap(" + quoteMap(map) + ");");
+            }
             checkMap(map);
         } catch (Exception e) {
             throw logAndConvert(e);
@@ -1031,7 +1045,9 @@ public class JdbcConnection extends TraceObject implements Connection {
     public void rollback(Savepoint savepoint) throws SQLException {
         try {
             JdbcSavepoint sp = convertSavepoint(savepoint);
-            debugCode("rollback(" + sp.getTraceObjectName() + ");");
+            if (isDebugEnabled()) {
+                debugCode("rollback(" + sp.getTraceObjectName() + ");");
+            }
             checkClosedForWrite();
             try {
                 sp.rollback();
@@ -1194,7 +1210,7 @@ public class JdbcConnection extends TraceObject implements Connection {
 
     private static int translateGetEnd(String sql, int i, char c) {
         int len = sql.length();
-        switch(c) {
+        switch (c) {
         case '$': {
             if (i < len - 1 && sql.charAt(i + 1) == '$' &&
                     (i == 0 || sql.charAt(i - 1) <= ' ')) {
@@ -1532,7 +1548,8 @@ public class JdbcConnection extends TraceObject implements Connection {
                 "SELECT SCOPE_IDENTITY() " +
                 "WHERE SCOPE_IDENTITY() IS NOT NULL", getGeneratedKeys);
         ResultInterface result = getGeneratedKeys.executeQuery(0, false);
-        ResultSet rs = new JdbcResultSet(this, stat, result, id, false, true, false);
+        ResultSet rs = new JdbcResultSet(this, stat, getGeneratedKeys, result,
+                id, false, true, false);
         return rs;
     }
 
@@ -1619,12 +1636,24 @@ public class JdbcConnection extends TraceObject implements Connection {
     }
 
     /**
-     * [Not supported] Create a new empty Array object.
+     * Create a new Array object.
+     *
+     * @param typeName the type name
+     * @param elements the values
+     * @return the array
      */
     @Override
     public Array createArrayOf(String typeName, Object[] elements)
             throws SQLException {
-        throw unsupported("createArray");
+        try {
+            int id = getNextId(TraceObject.ARRAY);
+            debugCodeAssign("Array", TraceObject.ARRAY, id, "createArrayOf()");
+            checkClosed();
+            Value value = DataType.convertToValue(session, elements, Value.ARRAY);
+            return new JdbcArray(this, value, id);
+        } catch (Exception e) {
+            throw logAndConvert(e);
+        }
     }
 
     /**
@@ -1661,11 +1690,26 @@ public class JdbcConnection extends TraceObject implements Connection {
     }
 
     /**
-     * Set a client property.
-     * This method always throws a SQLClientInfoException.
+     * Set a client property. This method always throws a SQLClientInfoException
+     * in standard mode. In compatibility mode the following properties are
+     * supported:
+     * <ul>
+     * <li>DB2: The properties: ApplicationName, ClientAccountingInformation,
+     * ClientUser and ClientCorrelationToken are supported.
+     * </li>
+     * <li>MySQL: All property names are supported.
+     * </li>
+     * <li>Oracle: All properties in the form &lt;namespace&gt;.&lt;key name&gt;
+     * are supported.
+     * </li>
+     * <li>PostgreSQL: The ApplicationName property is supported.
+     * </li>
+     * </ul>
      *
-     * @param name the name of the property (ignored)
-     * @param value the value (ignored)
+     * For unsupported properties a SQLClientInfoException is thrown.
+     *
+     * @param name the name of the property
+     * @param value the value
      */
     @Override
     public void setClientInfo(String name, String value)
@@ -1677,11 +1721,32 @@ public class JdbcConnection extends TraceObject implements Connection {
                         +quote(value)+");");
             }
             checkClosed();
-            // we don't have any client properties, so just throw
-            throw new SQLClientInfoException();
+
+            if (isInternalProperty(name)) {
+                throw new SQLClientInfoException("Property name '" + name +
+                        " is used internally by H2.",
+                        Collections.<String, ClientInfoStatus> emptyMap());
+            }
+
+            Pattern clientInfoNameRegEx =
+                    Mode.getInstance(getMode()).supportedClientInfoPropertiesRegEx;
+
+            if (clientInfoNameRegEx != null && clientInfoNameRegEx.matcher(name).matches()) {
+                if (clientInfo == null) {
+                    clientInfo = new HashMap<String, String>();
+                }
+                clientInfo.put(name, value);
+            } else {
+                throw new SQLClientInfoException("Client info name '" + name + "' not supported.",
+                        Collections.<String, ClientInfoStatus> emptyMap());
+            }
         } catch (Exception e) {
             throw convertToClientInfoException(logAndConvert(e));
         }
+    }
+
+    private static boolean isInternalProperty(String name) {
+        return NUM_SERVERS.equals(name) || name.startsWith(PREFIX_SERVER);
     }
 
     private static SQLClientInfoException convertToClientInfoException(
@@ -1694,8 +1759,11 @@ public class JdbcConnection extends TraceObject implements Connection {
     }
 
     /**
-     * Set the client properties.
-     * This method always throws a SQLClientInfoException.
+     * Set the client properties. This replaces all existing properties.
+     *
+     * This method always throws a SQLClientInfoException in standard mode. In
+     * compatibility mode some properties may be supported (see
+     * setProperty(String, String) for details).
      *
      * @param properties the properties (ignored)
      */
@@ -1706,8 +1774,14 @@ public class JdbcConnection extends TraceObject implements Connection {
                 debugCode("setClientInfo(properties);");
             }
             checkClosed();
-            // we don't have any client properties, so just throw
-            throw new SQLClientInfoException();
+            if (clientInfo == null) {
+                clientInfo = new HashMap<String, String>();
+            } else {
+                clientInfo.clear();
+            }
+            for (Map.Entry<Object, Object> entry : properties.entrySet()) {
+                setClientInfo((String) entry.getKey(), (String) entry.getValue());
+            }
         } catch (Exception e) {
             throw convertToClientInfoException(logAndConvert(e));
         }
@@ -1728,10 +1802,17 @@ public class JdbcConnection extends TraceObject implements Connection {
             ArrayList<String> serverList = session.getClusterServers();
             Properties p = new Properties();
 
-            p.setProperty("numServers", String.valueOf(serverList.size()));
-            for (int i = 0; i < serverList.size(); i++) {
-                p.setProperty("server" + String.valueOf(i), serverList.get(i));
+            if (clientInfo != null) {
+                for (Map.Entry<String, String> entry : clientInfo.entrySet()) {
+                    p.setProperty(entry.getKey(), entry.getValue());
+                }
             }
+
+            p.setProperty(NUM_SERVERS, String.valueOf(serverList.size()));
+            for (int i = 0; i < serverList.size(); i++) {
+                p.setProperty(PREFIX_SERVER + String.valueOf(i), serverList.get(i));
+            }
+
             return p;
         } catch (Exception e) {
             throw logAndConvert(e);
@@ -1741,8 +1822,9 @@ public class JdbcConnection extends TraceObject implements Connection {
     /**
      * Get a client property.
      *
-     * @param name the client info name (ignored)
-     * @return the property value
+     * @param name the client info name
+     * @return the property value or null if the property is not found or not
+     *         supported.
      */
     @Override
     public String getClientInfo(String name) throws SQLException {
@@ -1751,12 +1833,10 @@ public class JdbcConnection extends TraceObject implements Connection {
                 debugCodeCall("getClientInfo", name);
             }
             checkClosed();
-            Properties p = getClientInfo();
-            String s = p.getProperty(name);
-            if (s == null) {
-                throw new SQLClientInfoException();
+            if (name == null) {
+                throw DbException.getInvalidValueException("name", null);
             }
-            return s;
+            return getClientInfo().getProperty(name);
         } catch (Exception e) {
             throw logAndConvert(e);
         }
@@ -1771,10 +1851,14 @@ public class JdbcConnection extends TraceObject implements Connection {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T unwrap(Class<T> iface) throws SQLException {
-        if (isWrapperFor(iface)) {
-            return (T) this;
+        try {
+            if (isWrapperFor(iface)) {
+                return (T) this;
+            }
+            throw DbException.getInvalidValueException("iface", iface);
+        } catch (Exception e) {
+            throw logAndConvert(e);
         }
-        throw DbException.getInvalidValueException("iface", iface);
     }
 
     /**
@@ -1829,38 +1913,51 @@ public class JdbcConnection extends TraceObject implements Connection {
     }
 
     /**
-     * [Not supported]
+     * Sets the given schema name to access. Current implementation is case
+     * sensitive, i.e. requires schema name to be passed in correct case.
      *
-     * @param schema the schema
+     * @param schema the schema name
      */
-//## Java 1.7 ##
     @Override
-    public void setSchema(String schema) {
-        // not supported
+    public void setSchema(String schema) throws SQLException {
+        try {
+            if (isDebugEnabled()) {
+                debugCodeCall("setSchema", schema);
+            }
+            checkClosed();
+            session.setCurrentSchemaName(schema);
+        } catch (Exception e) {
+            throw logAndConvert(e);
+        }
     }
-//*/
 
     /**
-     * [Not supported]
+     * Retrieves this current schema name for this connection.
+     *
+     * @return current schema name
      */
-//## Java 1.7 ##
     @Override
-    public String getSchema() {
-        return null;
+    public String getSchema() throws SQLException {
+        try {
+            if (isDebugEnabled()) {
+                debugCodeCall("getSchema");
+            }
+            checkClosed();
+            return session.getCurrentSchemaName();
+        } catch (Exception e) {
+            throw logAndConvert(e);
+        }
     }
-//*/
 
     /**
      * [Not supported]
      *
      * @param executor the executor used by this method
      */
-//## Java 1.7 ##
     @Override
     public void abort(Executor executor) {
         // not supported
     }
-//*/
 
     /**
      * [Not supported]
@@ -1868,22 +1965,18 @@ public class JdbcConnection extends TraceObject implements Connection {
      * @param executor the executor used by this method
      * @param milliseconds the TCP connection timeout
      */
-//## Java 1.7 ##
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) {
         // not supported
     }
-//*/
 
     /**
      * [Not supported]
      */
-//## Java 1.7 ##
     @Override
     public int getNetworkTimeout() {
         return 0;
     }
-//*/
 
     /**
      * Check that the given type map is either null or empty.
@@ -1937,7 +2030,7 @@ public class JdbcConnection extends TraceObject implements Connection {
     }
 
     CompareMode getCompareMode() {
-        return session.getDataHandler().getCompareMode(); 
+        return session.getDataHandler().getCompareMode();
     }
 
     /**
@@ -1945,6 +2038,19 @@ public class JdbcConnection extends TraceObject implements Connection {
      */
     public void setTraceLevel(int level) {
         trace.setLevel(level);
+    }
+
+    String getMode() throws SQLException {
+        if (mode == null) {
+            PreparedStatement prep = prepareStatement(
+                    "SELECT VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE NAME=?");
+            prep.setString(1, "MODE");
+            ResultSet rs = prep.executeQuery();
+            rs.next();
+            mode = rs.getString(1);
+            prep.close();
+        }
+        return mode;
     }
 
 }

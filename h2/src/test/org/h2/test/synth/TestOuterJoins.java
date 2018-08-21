@@ -35,15 +35,11 @@ public class TestOuterJoins extends TestBase {
     public static void main(String... a) throws Exception {
         TestBase test = TestBase.createCaller().init();
         test.config.traceTest = true;
-        test.config.nestedJoins = true;
         test.test();
     }
 
     @Override
     public void test() throws Exception {
-        if (!config.nestedJoins) {
-            return;
-        }
         deleteDb("outerJoins");
         testCases();
         testRandom();
@@ -308,7 +304,7 @@ public class TestOuterJoins extends TestBase {
                 "left outer join (test c) on a.id = c.id");
         assertTrue(rs.next());
         sql = rs.getString(1);
-        assertTrue(sql.contains("PRIMARY_KEY"));
+        assertContains(sql, "PRIMARY_KEY");
         stat.execute("drop table test");
 
         /*

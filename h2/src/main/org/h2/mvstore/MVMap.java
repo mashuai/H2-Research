@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
-
 import org.h2.mvstore.type.DataType;
 import org.h2.mvstore.type.ObjectDataType;
 import org.h2.util.New;
@@ -60,14 +59,18 @@ public class MVMap<K, V> extends AbstractMap<K, V>
     private ConcurrentArrayList<Page> oldRoots =
             new ConcurrentArrayList<Page>();
 
-    private boolean closed;
+
+    /**
+     * Whether the map is closed. Volatile so we don't accidentally write to a
+     * closed map in multithreaded mode.
+     */
+    private volatile boolean closed;
     private boolean readOnly;
     private boolean isVolatile;
 
     protected MVMap(DataType keyType, DataType valueType) {
         this.keyType = keyType;
         this.valueType = valueType;
-        this.root = Page.createEmpty(this,  -1);
     }
 
     /**
@@ -101,6 +104,7 @@ public class MVMap<K, V> extends AbstractMap<K, V>
         this.id = DataUtils.readHexInt(config, "id", 0);
         this.createVersion = DataUtils.readHexLong(config, "createVersion", 0);
         this.writeVersion = store.getCurrentVersion();
+        this.root = Page.createEmpty(this,  -1);
     }
 
     /**
@@ -121,23 +125,6 @@ public class MVMap<K, V> extends AbstractMap<K, V>
         Object result = put(p, v, key, value);
         newRoot(p);
         return (V) result;
-    }
-
-    /**
-     * Add or replace a key-value pair in a branch.
-     *
-     * @param root the root page
-     * @param key the key (may not be null)
-     * @param value the value (may not be null)
-     * @return the new root page
-     */
-    synchronized Page putBranch(Page root, K key, V value) {
-        DataUtils.checkArgument(value != null, "The value may not be null");
-        long v = writeVersion;
-        Page p = root.copy(v);
-        p = splitRootIfNeeded(p, v);
-        put(p, v, key, value);
-        return p;
     }
 
     /**
@@ -200,7 +187,7 @@ public class MVMap<K, V> extends AbstractMap<K, V>
             Object k = c.getKey(at);
             Page split = c.split(at);
             p.setChild(index, split); //这里把右边节点替换原来的
-            p.insertNode(index, k, c); //这里把左边节点插入，把前面的往右挪
+            p.insertNode(index, k, c); //这里把左边节点插入，把前面的往右挪，同时在keys数组中加入新的k
             // now we are not sure where to add
             return put(p, writeVersion, key, value);
         }
@@ -244,6 +231,7 @@ public class MVMap<K, V> extends AbstractMap<K, V>
         long offset = 0;
         while (true) {
             if (p.isLeaf()) {
+                //不可能发生，因为前面的if (index < 0 || index >= size())已经保证index是在有效范围内
                 if (index >= offset + p.getKeyCount()) {
                     return null;
                 }
@@ -257,7 +245,7 @@ public class MVMap<K, V> extends AbstractMap<K, V>
                 }
                 offset += c;
             }
-            if (i == size) {
+            if (i == size) { //不可能发生，因为前面的if (index < 0 || index >= size())已经保证index是在有效范围内
                 return null;
             }
             p = p.getChildPage(i);
@@ -478,30 +466,6 @@ public class MVMap<K, V> extends AbstractMap<K, V>
     @Override
     public boolean containsKey(Object key) {
         return get(key) != null;
-    }
-
-    /**
-     * Get the value for the given key, or null if not found.
-     *
-     * @param p the parent page
-     * @param key the key
-     * @return the page or null
-     */
-    protected Page binarySearchPage(Page p, Object key) {
-        int x = p.binarySearch(key);
-        if (!p.isLeaf()) {
-            if (x < 0) {
-                x = -x - 1;
-            } else {
-                x++;
-            }
-            p = p.getChildPage(x);
-            return binarySearchPage(p, key);
-        }
-        if (x >= 0) {
-            return p;
-        }
-        return null;
     }
 
     /**
@@ -995,7 +959,7 @@ public class MVMap<K, V> extends AbstractMap<K, V>
         if (oldest == -1) {
             return;
         }
-        Page last = oldRoots.peekLast();
+        Page last = oldRoots.peekLast(); //后面的是最近加入的
         while (true) {
             Page p = oldRoots.peekFirst();
             if (p == null || p.getVersion() >= oldest || p == last) {

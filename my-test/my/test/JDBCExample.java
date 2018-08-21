@@ -21,12 +21,11 @@ package my.test;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Random;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CountDownLatch;
 
 public class JDBCExample {
@@ -42,7 +41,8 @@ public class JDBCExample {
     }
 
     static Random random = new Random();
-    private static final ConcurrentNavigableMap<Value, String> rows = new ConcurrentSkipListMap<Value, String>();
+
+    // private static final ConcurrentNavigableMap<Value, String> rows = new ConcurrentSkipListMap<Value, String>();
 
     static class Value implements Comparable<Value> {
         int v;
@@ -78,22 +78,22 @@ public class JDBCExample {
         @Override
         public void run() {
             try {
-                //                long t1 = System.currentTimeMillis();
-                //                for (int i = start; i < end; i++) {
-                //                    String sql = "INSERT INTO test(f1, f2) VALUES(" + i + "," + i * 10 + ")";
-                //                    stmt.executeUpdate(sql);
+                // long t1 = System.currentTimeMillis();
+                // for (int i = start; i < end; i++) {
+                // String sql = "INSERT INTO test(f1, f2) VALUES(" + i + "," + i * 10 + ")";
+                // stmt.executeUpdate(sql);
                 //
-                //                    //rows.put(new Value(i), sql);
+                // //rows.put(new Value(i), sql);
                 //
-                //                }
+                // }
                 long t1 = System.currentTimeMillis();
                 for (int i = start; i < end; i++) {
-                    //ResultSet rs = stmt.executeQuery("SELECT * FROM test where f1 <= 3");
+                    // ResultSet rs = stmt.executeQuery("SELECT * FROM test where f1 <= 3");
                     ResultSet rs = stmt.executeQuery("SELECT * FROM test where f1 = " + random.nextInt(end));
 
                     while (rs.next()) {
                         // System.out.println("f1=" + rs.getInt(1) + " f2=" + rs.getLong(2));
-                        //System.out.println();
+                        // System.out.println();
                     }
                 }
                 long t2 = System.currentTimeMillis();
@@ -111,28 +111,28 @@ public class JDBCExample {
     }
 
     public static void main(String[] args) throws Exception {
-        //        //System.out.println("Create MemoryTable: ");
-        //        //String url = "jdbc:lealone:tcp://localhost:9092/hbasedb?default_table_engine=memory";
-        //        //url = "jdbc:lealone:embed:hbasedb?default_table_engine=cbase";
-        //        stmt.executeUpdate("DROP TABLE IF EXISTS test");
-        //        stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test (f1 int primary key, f2 long)"); //engine cbase");
-        //        //        stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test2 (f1 int primary key, f2 long) engine hbase");
-        //        //        stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test3 (f1 int primary key, f2 long) engine cassandra");
-        //        //stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test3 (f1 int primary key, f2 long) engine memory");
-        //        // stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test4 (f1 int primary key, f2 long)"); //memory store
-        //        long t1 = System.currentTimeMillis();
-        //        for (int i = 1; i < 100000; i++) {
-        //            stmt.executeUpdate("INSERT INTO test(f1, f2) VALUES(" + i + "," + i * 10 + ")");
-        //        }
-        //        long t2 = System.currentTimeMillis();
-        //        System.out.println("time: " + (t2 - t1));
-        //        stmt.executeUpdate("UPDATE test SET f2 = 1 where f1 = 1");
-        //        ResultSet rs = stmt.executeQuery("SELECT * FROM test where f1 <= 3");
-        //        while (rs.next()) {
-        //            System.out.println("f1=" + rs.getInt(1) + " f2=" + rs.getLong(2));
-        //            //System.out.println();
-        //        }
-        //        stmt.executeUpdate("DELETE FROM test WHERE f1 = 1");
+        // //System.out.println("Create MemoryTable: ");
+        // //String url = "jdbc:lealone:tcp://localhost:9092/hbasedb?default_table_engine=memory";
+        // //url = "jdbc:lealone:embed:hbasedb?default_table_engine=cbase";
+        // stmt.executeUpdate("DROP TABLE IF EXISTS test");
+        // stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test (f1 int primary key, f2 long)"); //engine cbase");
+        // // stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test2 (f1 int primary key, f2 long) engine hbase");
+        // // stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test3 (f1 int primary key, f2 long) engine cassandra");
+        // //stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test3 (f1 int primary key, f2 long) engine memory");
+        // // stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test4 (f1 int primary key, f2 long)"); //memory store
+        // long t1 = System.currentTimeMillis();
+        // for (int i = 1; i < 100000; i++) {
+        // stmt.executeUpdate("INSERT INTO test(f1, f2) VALUES(" + i + "," + i * 10 + ")");
+        // }
+        // long t2 = System.currentTimeMillis();
+        // System.out.println("time: " + (t2 - t1));
+        // stmt.executeUpdate("UPDATE test SET f2 = 1 where f1 = 1");
+        // ResultSet rs = stmt.executeQuery("SELECT * FROM test where f1 <= 3");
+        // while (rs.next()) {
+        // System.out.println("f1=" + rs.getInt(1) + " f2=" + rs.getLong(2));
+        // //System.out.println();
+        // }
+        // stmt.executeUpdate("DELETE FROM test WHERE f1 = 1");
 
         Connection conn = getConnection();
         Statement stmt = conn.createStatement();
@@ -140,15 +140,19 @@ public class JDBCExample {
         stmt.executeUpdate("CREATE TABLE IF NOT EXISTS test (f1 int primary key, f2 long)");
         stmt.executeUpdate("set MULTI_THREADED 1");
 
+        PreparedStatement ps = conn.prepareStatement("delete from test where f1=$1");
+        ps.setInt(1, 3);
+        ps.executeUpdate();
+
         for (int i = 1; i < 50000; i++) {
             String sql = "INSERT INTO test(f1, f2) VALUES(" + i + "," + i * 10 + ")";
             stmt.executeUpdate(sql);
 
-            //rows.put(new Value(i), sql);
+            // rows.put(new Value(i), sql);
 
         }
-        //        stmt.close();
-        //        conn.close();
+        // stmt.close();
+        // conn.close();
 
         int count = 10;
         latch = new CountDownLatch(count);

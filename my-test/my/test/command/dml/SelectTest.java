@@ -25,10 +25,13 @@ public class SelectTest extends TestBase {
 
         // parseSelectSimpleSelectPart();
         // readTableFilter();
+        // readJoin();
         // parseEndOfQuery();
         // parseSelectSimpleFromPart();
         //
-        // select_init();
+
+        // queryFlat();
+        select_init();
         // queryGroup();
         // queryGroupSorted();
         //
@@ -39,7 +42,7 @@ public class SelectTest extends TestBase {
         // prepare();
         // queryWithoutCache();
 
-        preparePlan();
+        // preparePlan();
 
     }
 
@@ -76,6 +79,7 @@ public class SelectTest extends TestBase {
             stmt.executeUpdate("insert into mytable2(id2, name2) values(" + i * 10 + ", 'abcdef1234')");
         }
         stmt.executeUpdate("insert into mytable(id, name, age) values(" + 1 + ", '" + 1 + "abcdef1234', 10)");
+        stmt.executeUpdate("insert into mytable(id, name, age) values(" + 1 + ", '" + 1 + "abcdef12343', 10)");
         stmt.executeUpdate("insert into mytable(id, name, age) values(" + 1 + ", '" + 2 + "abcdef1234', 20)");
         stmt.executeUpdate("insert into mytable(id, name, age) values(" + 2 + ", '" + 3 + "abcdef1234', 30)");
         stmt.executeUpdate("insert into mytable(id, name, age) values(" + 2 + ", '" + 4 + "abcdef1234', 40)");
@@ -147,28 +151,71 @@ public class SelectTest extends TestBase {
     }
 
     // 测试org.h2.command.Parser.readTableFilter(boolean)
-    void readTableFilter() {
+    void readTableFilter() throws Exception {
         sql = "FROM (select 1, 2) SELECT * ";
+        executeQuery();
+        sql = "FROM (select 1, 2) as t SELECT * ";
+        executeQuery();
         sql = "FROM ((select 1, 2)) SELECT * ";
         sql = "FROM (((select 1, 2))) SELECT * ";
 
         sql = "FROM (mytable) SELECT * ";
+        executeQuery();
         sql = "FROM (mytable1 RIGHT OUTER JOIN mytable2 ON mytable1.id1=mytable2.id2) AS t SELECT * ";
 
         sql = "FROM VALUES(1, 'Hello'), (2, 'World') AS t SELECT * ";
+        executeQuery();
+
+        sql = "FROM mytable(index mytable_age_index) SELECT * "; // 目前index mytable_age_index并没有实现
+        executeQuery();
 
         sql = "FROM SYSTEM_RANGE(1,100) SELECT * ";
+        executeQuery();
+
+        sql = "FROM GENERATE_SERIES(1,100,10) SELECT * ";
+        executeQuery();
+
         sql = "FROM TABLE(ID INT=(1, 2), NAME VARCHAR=('Hello', 'World')) SELECT * ";
-        // sql = "FROM USER() SELECT * "; //函数返回值类型必须是RESULT_SET
+        executeQuery();
+        sql = "FROM USER() SELECT * "; // 函数返回值类型必须是RESULT_SET
+        tryExecuteQuery();
+
         sql = "FROM DUAL SELECT * ";
+        executeQuery();
+
         sql = "FROM SYSDUMMY1 SELECT * "; // 要加prop.setProperty("MODE", "DB2")
+        executeQuery();
 
-        sql = "FROM mytable SELECT * ";
+        // 下面两者是一样的
+        sql = "FROM mytable as t SELECT * ";
+        executeQuery();
 
+        sql = "FROM mytable t SELECT * ";
+        executeQuery();
+    }
+
+    void readJoin() throws Exception {
     }
 
     // 以下部分测试org.h2.command.Parser.parseEndOfQuery(Query)
     void parseEndOfQuery() throws Exception {
+        sql = "select id,name,age from mytable order by 1, =? DESC";
+        ps = conn.prepareStatement(sql);
+        ps.setInt(1, 2);
+        rs = ps.executeQuery();
+        printResultSet(rs);
+
+        sql = "select id,name,age from mytable order by ? DESC";
+        ps = conn.prepareStatement(sql);
+        ps.setInt(1, 2);
+        rs = ps.executeQuery();
+        printResultSet(rs);
+
+        sql = "select id,name from mytable order by =1 DESC";
+        executeQuery();
+
+        sql = "select id,name from mytable order by -1 DESC";
+        executeQuery();
 
         sql = "select name from mytable order by id";
 
@@ -309,12 +356,51 @@ public class SelectTest extends TestBase {
     }
 
     void select_init() throws Exception {
-        expandColumnList();
-        Query_initOrder();
-        init_havingIndex();
+        // expandColumnList();
+        // Query_initOrder();
+
+        // sql = "select age, count(id) from mytable group by id,name";
+        // executeQuery();
+        //
+        // sql = "select age, count(id), name from mytable group by id,name";
+        // executeQuery();
+        //
+        // sql = "select age, count(id), name from mytable group by name, 2";
+        // executeQuery();
+        //
+        // 测试havingIndex
+        // sql = "select id,count(id) from mytable group by id having id=3";
+        // executeQuery();
+        // sql = "SELECT X/3 AS A, COUNT(*) FROM SYSTEM_RANGE(1, 1) GROUP BY A HAVING A>=0";
+        // executeQuery();
+        // sql = "SELECT X/3 AS A, COUNT(*) FROM SYSTEM_RANGE(1, 10) GROUP BY A HAVING A>=1";
+        // executeQuery();
+        //
+        // sql = "select id,age, count(*),name from mytable group by id,age HAVING id>0";
+        // executeQuery();
+        //
+        sql = "SELECT id AS A FROM mytable where A>=0";
+        // executeQuery();
+        sql = "SELECT id/3 AS A, COUNT(*) FROM mytable GROUP BY A HAVING A>=0";
+        executeQuery();
     }
 
     void expandColumnList() throws Exception {
+        // 不允许这样
+        sql = "select mytable.* from mytable t";
+        // 只能这样
+        sql = "select t.* from mytable t";
+        executeQuery();
+
+        stmt.executeUpdate("drop table IF EXISTS emptytable");
+        stmt.executeUpdate("create table IF NOT EXISTS emptytable()");
+
+        sql = "select 2, *, 1 from emptytable";
+        executeQuery();
+
+        sql = "select *,name from emptytable, mytable";
+        executeQuery();
+
         sql = "select * from mytable";
         executeQuery();
         sql = "select public.mytable.*, name from mytable";
@@ -371,24 +457,26 @@ public class SelectTest extends TestBase {
         sql = "select name,ONE from mytable where name = 'abc' || '123'";
     }
 
-    void init_havingIndex() throws Exception {
-        sql = "select id,count(id) from mytable where id>2  group by id having id=3";
-        executeQuery();
-    }
-
     void queryGroup() throws Exception {
         sql = "select id from mytable group by id";
 
         sql = "select id from mytable group by id having id>2";
 
         sql = "select id, count(id) from mytable group by id having id>2";
+        executeQuery();
+
+        // sql = "select name, count(name) from mytable group by name having name>2";
+        // executeQuery();
+
         sql = "select id, count(id) from mytable group by id";
         sql = "select count(id) from mytable group by id";
         // sql = "select id,name,count(id) from mytable where id>0";
         sql = "select id,count(id) from mytable where id>0";
         // sql = "select id,count(id) from mytable where id>0  group by id";
 
-        // sql = "select max(id), count(id) from mytable where id>1";
+        sql = "select max(id), count(id) from mytable where id>1";
+
+        executeQuery();
 
         stmt.executeUpdate("delete from mytable");
 
@@ -411,39 +499,41 @@ public class SelectTest extends TestBase {
         executeQuery();
     }
 
-    void queryGroupSorted() {
-        sql = "select id from mytable group by id";
+    void queryGroupSorted() throws Exception {
+        stmt.executeUpdate("drop table IF EXISTS queryGroupSorted");
+        stmt.executeUpdate("create table IF NOT EXISTS queryGroupSorted(id int, name varchar(500), age int)");
+        stmt.executeUpdate("create index IF NOT EXISTS queryGroupSorted_index_id on queryGroupSorted(id)");
+        stmt.executeUpdate("create index IF NOT EXISTS queryGroupSorted_index_name on queryGroupSorted(name)");
+        stmt.executeUpdate("create index IF NOT EXISTS queryGroupSorted_index_id_name_age on queryGroupSorted(id,name,age)");
 
-        sql = "select id from mytable group by id having id>2";
+        stmt.executeUpdate("insert into queryGroupSorted(id, name, age) values(1, 'a', 10)");
+        stmt.executeUpdate("insert into queryGroupSorted(id, name, age) values(2, 'b', 10)");
+        stmt.executeUpdate("insert into queryGroupSorted(id, name, age) values(1, 'a', 20)");
+        stmt.executeUpdate("insert into queryGroupSorted(id, name, age) values(2, 'b', 10)");
+        stmt.executeUpdate("insert into queryGroupSorted(id, name, age) values(3, 'a', 20)");
+        stmt.executeUpdate("insert into queryGroupSorted(id, name, age) values(3, 'b', 10)");
 
-        sql = "select id, count(id) from mytable group by id having id>2";
-        sql = "select id, count(id) from mytable group by id";
-        sql = "select count(id) from mytable group by id";
-        // sql = "select id,name,count(id) from mytable where id>0";
-        sql = "select id,count(id) from mytable where id>0";
-        // sql = "select id,count(id) from mytable where id>0  group by id";
+        // 下面三个都会使用GroupSortedIndex
+        // 也就是走queryGroupSorted_index_id_name_age索引
+        // group by后面字段的顺序是不重要的，谁先谁后都可以，所以下面两条sql会得到一样的结果
+        sql = "select id,name,count(id) from queryGroupSorted group by id,name";
+        executeQuery();
+        sql = "select id,name,count(id) from queryGroupSorted group by name,id";
+        executeQuery();
+        sql = "select id,name,age,count(id) from queryGroupSorted group by id,name,age having id<3";
+        executeQuery();
 
-        // sql = "select max(id), count(id) from mytable where id>1";
+        // 不会使用GroupSortedIndex，因为queryGroupSorted_index_id_name_age是按id, name, age的顺序，而不是id,age
+        sql = "select id,age,count(id) from queryGroupSorted group by id,age";
+        executeQuery();
 
-        sql = "select id,name,count(id) from mytable where id>0  group by id,name";
-
-        sql = "select id,count(id) from mytable where id>2  group by id having id=3";
-
-        // sql = "select count(id) from mytable where id>2 order by id";
-        // //不会触发queryGroupSorted
-        sql = "select id,count(id) from mytable where id>2 group by id having id=3 order by id";
-
-        // 下面几个都不能触发
-        // sql =
-        // "select id,count(id) from mytable where id>2 group by name,id having id=3 order by id";
-        // sql =
-        // "select id,count(id) from mytable where id>2 group by name,id having id=3 order by id,name";
-        // sql =
-        // "select id,count(id) from mytable where id>2 group by name,id having id=3 order by name,id";
-        // sql =
-        // "select id,count(id) from mytable where id>2 group by id,name having id=3 order by id";
-        // sql =
-        // "select id,count(id) from mytable where id>2 group by id,name having id=3 order by id,name";
+        // 不会使用GroupSortedIndex，
+        // group by字段必须是索引字段列表的前缀，这里是后缀了，少了id
+        sql = "select age,name,count(name) from queryGroupSorted group by age,name";
+        executeQuery();
+        // 同上
+        sql = "select name,age,count(name) from queryGroupSorted group by name,age";
+        executeQuery();
     }
 
     void queryQuick() throws Exception {
@@ -469,13 +559,14 @@ public class SelectTest extends TestBase {
         // stmt.executeUpdate("create UNIQUE index IF NOT EXISTS queryDistinct_index on queryDistinct(name)");
         // stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 1
         // + ", null)");
-        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 1 + ", '" + 1 + "abcdef1234')");
-        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 2 + ", '" + 2 + "abcdef1234')");
-        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 3 + ", '" + 3 + "abcdef1234')");
-        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 4 + ", '" + 4 + "abcdef1234')");
-        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 5 + ", '" + 5 + "abcdef1234')");
+        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 1 + ", 'a')");
+        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 2 + ", 'b')");
+        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 3 + ", 'a')");
+        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 4 + ", 'b')");
+        stmt.executeUpdate("insert into queryDistinct(id, name) values(" + 5 + ", 'c')");
 
         sql = "select LIMIT 2 2 distinct name from queryDistinct";
+        sql = "select distinct name from queryDistinct";
         executeQuery();
     }
 
@@ -486,8 +577,10 @@ public class SelectTest extends TestBase {
         stmt.executeUpdate("ALTER TABLE getSortIndex ALTER COLUMN id SELECTIVITY 10");
         stmt.executeUpdate("ALTER TABLE getSortIndex ALTER COLUMN name SELECTIVITY 10");
         // stmt.executeUpdate("ALTER TABLE getSortIndex ADD CONSTRAINT NAME_UNIQUE UNIQUE(name,id)");
-        stmt.executeUpdate("create index IF NOT EXISTS getSortIndex_index on getSortIndex(name)");
-        stmt.executeUpdate("create UNIQUE index IF NOT EXISTS getSortIndex_index2 on getSortIndex(name, id)");
+
+        stmt.executeUpdate("create index IF NOT EXISTS getSortIndex_id on getSortIndex(id)");
+        stmt.executeUpdate("create  index IF NOT EXISTS getSortIndex_name_id on getSortIndex(name, id)");
+        stmt.executeUpdate("create UNIQUE index IF NOT EXISTS getSortIndex_name on getSortIndex(name DESC)");
         // stmt.executeUpdate("insert into getSortIndex(id, name) values(" + 1 +
         // ", null)");
         stmt.executeUpdate("insert into getSortIndex(id, name) values(" + 1 + ", '" + 1 + "abcdef1234')");
@@ -498,7 +591,14 @@ public class SelectTest extends TestBase {
 
         sql = "select LIMIT 2 2 distinct name from getSortIndex";
 
-        sql = "select name from getSortIndex order by name";
+        // 测if (sortColumns[i].column != currentColumns[i].column)
+        sql = "select name from getSortIndex where id>1 order by name";
+        executeQuery();
+
+        // 测if (sortColumns[i].sortType != currentColumns[i].sortType)
+        // 如果把getSortIndex_name中的DESC去掉，swapIndex为false
+        // UNIQUE索引在org.h2.index.BaseIndex.getCostRangeIndex中算出的cost最小
+        sql = "select name from getSortIndex where name='1' order by name, id";
         executeQuery();
 
         sql = "select 3, name from getSortIndex order by name, 1";
@@ -524,13 +624,21 @@ public class SelectTest extends TestBase {
     }
 
     void queryWithoutCache() throws Exception {
-        // LIMIT 2 0 (实际上表是的是：OFFSET(2)、LIMIT(0))
+        // LIMIT 2 0 (实际上表示的是：OFFSET(2)、LIMIT(0))
         sql = "select LIMIT 2 0 id,name from mytable";
+        executeQuery();
+    }
+
+    void queryFlat() throws Exception {
+        System.out.println();
+        // OFFSET(1)、LIMIT(2))
+        sql = "select LIMIT 1 2 id,age from mytable for update";
         executeQuery();
     }
 
     void preparePlan() throws Exception {
         sql = "explain select id,name from mytable where id>2 or age<50";
+        sql = "select id,name from mytable where id>2 and age<50";
         executeQuery();
     }
 }

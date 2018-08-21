@@ -5,6 +5,7 @@
  */
 package org.h2.index;
 
+import java.util.HashSet;
 import org.h2.engine.Session;
 import org.h2.message.DbException;
 import org.h2.result.Row;
@@ -84,7 +85,7 @@ public class PageDelegateIndex extends PageIndex {
 
     @Override
     public Cursor findNext(Session session, SearchRow higherThan, SearchRow last) {
-        throw DbException.throwInternalError();
+        throw DbException.throwInternalError(toString());
     }
 
     @Override
@@ -96,10 +97,16 @@ public class PageDelegateIndex extends PageIndex {
     }
 
     @Override
-    public double getCost(Session session, int[] masks, TableFilter filter,
-            SortOrder sortOrder) {
+    public boolean isFirstColumn(Column column) {
+        return getColumnIndex(column) == 0;
+    }
+
+    @Override
+    public double getCost(Session session, int[] masks,
+            TableFilter[] filters, int filter, SortOrder sortOrder,
+            HashSet<Column> allColumnsSet) {
         return 10 * getCostRangeIndex(masks, mainIndex.getRowCount(session),
-                filter, sortOrder);
+                filters, filter, sortOrder, false, allColumnsSet);
     }
 
     @Override

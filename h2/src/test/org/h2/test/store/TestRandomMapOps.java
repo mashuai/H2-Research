@@ -5,11 +5,11 @@
  */
 package org.h2.test.store;
 
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Random;
 import java.util.TreeMap;
-
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
 import org.h2.store.fs.FileUtils;
@@ -20,8 +20,7 @@ import org.h2.test.TestBase;
  */
 public class TestRandomMapOps extends TestBase {
 
-    private String fileName;
-    private int seed;
+    private static final boolean LOG = false;
     private int op;
 
     /**
@@ -38,19 +37,19 @@ public class TestRandomMapOps extends TestBase {
     @Override
     public void test() throws Exception {
         testMap("memFS:randomOps.h3");
+        FileUtils.delete("memFS:randomOps.h3");
     }
 
-    private void testMap(String fileName) throws Exception {
-        this.fileName = fileName;
+    private void testMap(String fileName) {
         int best = Integer.MAX_VALUE;
         int bestSeed = 0;
         Throwable failException = null;
         int size = getSize(100, 1000);
-        for (seed = 0; seed < 100; seed++) {
+        for (int seed = 0; seed < 100; seed++) {
             FileUtils.delete(fileName);
             Throwable ex = null;
             try {
-                testOps(size);
+                testOps(fileName, size, seed);
                 continue;
             } catch (Exception e) {
                 ex = e;
@@ -72,12 +71,10 @@ public class TestRandomMapOps extends TestBase {
         }
     }
 
-    private void testOps(int size) throws Exception {
+    private void testOps(String fileName, int size, int seed) {
         FileUtils.delete(fileName);
-        MVStore s;
-        s = openStore(fileName);
-        MVMap<Integer, byte[]> m;
-        m = s.openMap("data");
+        MVStore s = openStore(fileName);
+        MVMap<Integer, byte[]> m = s.openMap("data");
         Random r = new Random(seed);
         op = 0;
         TreeMap<Integer, byte[]> map = new TreeMap<Integer, byte[]>();
@@ -182,9 +179,11 @@ public class TestRandomMapOps extends TestBase {
      * @param msg the message
      */
     private static void log(int op, int k, byte[] v, String msg) {
-        // msg = MessageFormat.format(msg, k,
-        //         v == null ? null : "new byte[" + v.length + "]");
-        // System.out.println(msg + "; // op " + op);
+        if (LOG) {
+            msg = MessageFormat.format(msg, k,
+                    v == null ? null : "new byte[" + v.length + "]");
+            System.out.println(msg + "; // op " + op);
+        }
     }
 
 }

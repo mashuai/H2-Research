@@ -27,11 +27,11 @@ public class Comment extends DbObjectBase {
 
     @Override
     public String getCreateSQLForCopy(Table table, String quotedName) {
-        throw DbException.throwInternalError();
+        throw DbException.throwInternalError(toString());
     }
 
     private static String getTypeName(int type) {
-        switch(type) {
+        switch (type) {
         case DbObject.CONSTANT:
             return "CONSTANT";
         case DbObject.CONSTRAINT:

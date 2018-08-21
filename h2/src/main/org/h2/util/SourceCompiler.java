@@ -5,6 +5,7 @@
  */
 package org.h2.util;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.File;
@@ -13,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.lang.reflect.Array;
@@ -22,13 +24,6 @@ import java.net.URI;
 import java.security.SecureClassLoader;
 import java.util.ArrayList;
 import java.util.HashMap;
-
-import org.h2.api.ErrorCode;
-import org.h2.engine.Constants;
-import org.h2.engine.SysProperties;
-import org.h2.message.DbException;
-import org.h2.store.fs.FileUtils;
-
 import javax.tools.FileObject;
 import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaCompiler;
@@ -38,6 +33,11 @@ import javax.tools.JavaFileObject.Kind;
 import javax.tools.SimpleJavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
+import org.h2.api.ErrorCode;
+import org.h2.engine.Constants;
+import org.h2.engine.SysProperties;
+import org.h2.message.DbException;
+import org.h2.store.fs.FileUtils;
 
 /**
  * This class allows to convert source code to a class. It uses one class loader
@@ -282,7 +282,7 @@ public class SourceCompiler {
                     .getStandardFileManager(null, null, null));
         ArrayList<JavaFileObject> compilationUnits = new ArrayList<JavaFileObject>();
         compilationUnits.add(new StringJavaFileObject(fullClassName, source));
-        // can not concurrently compile
+        // cannot concurrently compile
         synchronized (JAVA_COMPILER) {
             JAVA_COMPILER.getTask(writer, fileManager, null, null,
                 null, compilationUnits).call();
@@ -361,9 +361,25 @@ public class SourceCompiler {
     }
 
     private static void handleSyntaxError(String output) {
-        if (output.startsWith("Note:") || output.startsWith("warning:")) {
-            // just a warning (e.g. unchecked or unsafe operations)
-        } else if (output.length() > 0) {
+        boolean syntaxError = false;
+        final BufferedReader reader = new BufferedReader(new StringReader(output));
+        try {
+            for (String line; (line = reader.readLine()) != null;) {
+                if (line.endsWith("warning")) {
+                    // ignore summary line
+                } else if (line.startsWith("Note:")
+                        || line.startsWith("warning:")) {
+                    // just a warning (e.g. unchecked or unsafe operations)
+                } else {
+                    syntaxError = true;
+                    break;
+                }
+            }
+        } catch (IOException ignored) {
+            // exception ignored
+        }
+
+        if (syntaxError) {
             output = StringUtils.replaceAll(output, COMPILE_DIR, "");
             throw DbException.get(ErrorCode.SYNTAX_ERROR_1, output);
         }

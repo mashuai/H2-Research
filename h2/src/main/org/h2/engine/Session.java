@@ -10,16 +10,20 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.Random;
-
+import java.util.concurrent.TimeUnit;
 import org.h2.api.ErrorCode;
 import org.h2.command.Command;
 import org.h2.command.CommandInterface;
 import org.h2.command.Parser;
 import org.h2.command.Prepared;
+import org.h2.command.ddl.Analyze;
+import org.h2.command.dml.Query;
 import org.h2.command.dml.SetTypes;
 import org.h2.constraint.Constraint;
 import org.h2.index.Index;
+import org.h2.index.ViewIndex;
 import org.h2.jdbc.JdbcConnection;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
@@ -27,13 +31,17 @@ import org.h2.message.TraceSystem;
 import org.h2.mvstore.db.MVTable;
 import org.h2.mvstore.db.TransactionStore.Change;
 import org.h2.mvstore.db.TransactionStore.Transaction;
-import org.h2.result.LocalResult;
+import org.h2.result.ResultInterface;
 import org.h2.result.Row;
+import org.h2.result.SortOrder;
 import org.h2.schema.Schema;
 import org.h2.store.DataHandler;
 import org.h2.store.InDoubtTransaction;
 import org.h2.store.LobStorageFrontend;
+import org.h2.table.SubQueryInfo;
 import org.h2.table.Table;
+import org.h2.table.TableFilter;
+import org.h2.table.TableType;
 import org.h2.util.New;
 import org.h2.util.SmallLRUCache;
 import org.h2.value.Value;
@@ -73,33 +81,34 @@ public class Session extends SessionWithState {
     private int lockTimeout;
     private Value lastIdentity = ValueLong.get(0);
     private Value lastScopeIdentity = ValueLong.get(0);
+    private Value lastTriggerIdentity;
     private int firstUncommittedLog = Session.LOG_WRITTEN;
     private int firstUncommittedPos = Session.LOG_WRITTEN;
     private HashMap<String, Savepoint> savepoints;
     private HashMap<String, Table> localTempTables;
     private HashMap<String, Index> localTempTableIndexes;
     private HashMap<String, Constraint> localTempTableConstraints;
-    private int throttle;
+    private long throttleNs;
     private long lastThrottle;
     private Command currentCommand;
     private boolean allowLiterals;
     private String currentSchemaName;
     private String[] schemaSearchPath;
     private Trace trace;
-    private HashMap<String, Value> unlinkLobMap;
+    private HashMap<String, Value> removeLobMap;
     private int systemIdentifier;
     private HashMap<String, Procedure> procedures;
     private boolean undoLogEnabled = true;
     private boolean redoLogBinary = true;
     private boolean autoCommitAtTransactionEnd;
     private String currentTransactionName;
-    private volatile long cancelAt;
+    private volatile long cancelAtNs;
     private boolean closed;
     private final long sessionStart = System.currentTimeMillis();
     private long transactionStart;
     private long currentCommandStart;
     private HashMap<String, Value> variables;
-    private HashSet<LocalResult> temporaryResults;
+    private HashSet<ResultInterface> temporaryResults;
     private int queryTimeout;
     private boolean commitOrRollbackDisabled;
     private Table waitForLock;
@@ -109,6 +118,19 @@ public class Session extends SessionWithState {
     private final int queryCacheSize;
     private SmallLRUCache<String, Command> queryCache;
     private long modificationMetaID = -1;
+    private SubQueryInfo subQueryInfo;
+    private int parsingView;
+    private int preparingQueryExpression;
+    private volatile SmallLRUCache<Object, ViewIndex> viewIndexCache;
+    private HashMap<Object, ViewIndex> subQueryIndexCache;
+    private boolean joinBatchEnabled;
+    private boolean forceJoinOrder;
+    private boolean lazyQueryExecution;
+    /**
+     * Tables marked for ANALYZE after the current transaction is committed.
+     * Prevents us calling ANALYZE repeatedly in large transactions.
+     */
+    private HashSet<Table> tablesToAnalyze;
 
     /**
      * Temporary LOBs from result sets. Those are kept for some time. The
@@ -142,6 +164,101 @@ public class Session extends SessionWithState {
         this.currentSchemaName = Constants.SCHEMA_MAIN;
     }
 
+    public void setLazyQueryExecution(boolean lazyQueryExecution) {
+        this.lazyQueryExecution = lazyQueryExecution;
+    }
+
+    public boolean isLazyQueryExecution() {
+        return lazyQueryExecution;
+    }
+
+    public void setForceJoinOrder(boolean forceJoinOrder) {
+        this.forceJoinOrder = forceJoinOrder;
+    }
+
+    public boolean isForceJoinOrder() {
+        return forceJoinOrder;
+    }
+
+    public void setJoinBatchEnabled(boolean joinBatchEnabled) {
+        this.joinBatchEnabled = joinBatchEnabled;
+    }
+
+    public boolean isJoinBatchEnabled() {
+        return joinBatchEnabled;
+    }
+
+    /**
+     * Create a new row for a table.
+     *
+     * @param data the values
+     * @param memory whether the row is in memory
+     * @return the created row
+     */
+    public Row createRow(Value[] data, int memory) {
+        return database.createRow(data, memory);
+    }
+
+    /**
+     * Add a subquery info on top of the subquery info stack.
+     *
+     * @param masks the mask
+     * @param filters the filters
+     * @param filter the filter index
+     * @param sortOrder the sort order
+     */
+    public void pushSubQueryInfo(int[] masks, TableFilter[] filters, int filter,
+            SortOrder sortOrder) {
+        subQueryInfo = new SubQueryInfo(subQueryInfo, masks, filters, filter, sortOrder);
+    }
+
+    /**
+     * Remove the current subquery info from the stack.
+     */
+    public void popSubQueryInfo() {
+        subQueryInfo = subQueryInfo.getUpper();
+    }
+
+    public SubQueryInfo getSubQueryInfo() {
+        return subQueryInfo;
+    }
+
+    public void setParsingView(boolean parsingView) {
+        // It can be recursive, thus implemented as counter.
+        this.parsingView += parsingView ? 1 : -1;
+        assert this.parsingView >= 0;
+    }
+
+    public boolean isParsingView() {
+        assert parsingView >= 0;
+        return parsingView != 0;
+    }
+
+    /**
+     * Optimize a query. This will remember the subquery info, clear it, prepare
+     * the query, and reset the subquery info.
+     *
+     * @param query the query to prepare
+     */
+    public void optimizeQueryExpression(Query query) {
+        // we have to hide current subQueryInfo if we are going to optimize
+        // query expression
+        SubQueryInfo tmp = subQueryInfo;
+        subQueryInfo = null;
+        preparingQueryExpression++;
+        try {
+            query.prepare();
+        } finally {
+            subQueryInfo = tmp;
+            preparingQueryExpression--;
+        }
+    }
+
+    public boolean isPreparingQueryExpression() {
+        assert preparingQueryExpression >= 0;
+        return preparingQueryExpression != 0;
+    }
+
     @Override
     public ArrayList<String> getClusterServers() {
         return new ArrayList<String>();
@@ -173,14 +290,13 @@ public class Session extends SessionWithState {
             old = variables.remove(name);
         } else {
             // link LOB values, to make sure we have our own object
-            value = value.link(database,
+            value = value.copy(database,
                     LobStorageFrontend.TABLE_ID_SESSION_VARIABLE);
             old = variables.put(name, value);
         }
         if (old != null) {
-            // close the old value (in case it is a lob)
-            old.unlink(database);
-            old.close();
+            // remove the old value (in case it is a lob)
+            old.remove();
         }
     }
 
@@ -465,7 +581,13 @@ public class Session extends SessionWithState {
             }
         }
         Parser parser = new Parser(this);
-        command = parser.prepareCommand(sql);
+        try {
+            command = parser.prepareCommand(sql);
+        } finally {
+            // we can't reuse sub-query indexes, so just drop the whole cache
+            subQueryIndexCache = null;
+        }
+        command.prepareJoinBatch();
         if (queryCache != null) {
             //只有DML并且是下面的这几类可缓存:
             //Insert、Delete、Update、Merge、TransactionCommand这5个无条件可缓存
@@ -553,28 +675,42 @@ public class Session extends SessionWithState {
             }
         }
         endTransaction();
+
+        int rows = getDatabase().getSettings().analyzeSample / 10;
+        if (tablesToAnalyze != null) {
+            for (Table table : tablesToAnalyze) {
+                Analyze.analyzeTable(this, table, rows, false);
+            }
+        }
+        tablesToAnalyze = null;
     }
 
     private void removeTemporaryLobs(boolean onTimeout) {
+        if (SysProperties.CHECK2) {
+            if (this == getDatabase().getLobSession()
+                    && !Thread.holdsLock(this) && !Thread.holdsLock(getDatabase())) {
+                throw DbException.throwInternalError();
+            }
+        }
         if (temporaryLobs != null) {
             for (Value v : temporaryLobs) {
-                if (!v.isLinked()) {
-                    v.close();
+                if (!v.isLinkedToTable()) {
+                    v.remove();
                 }
             }
             temporaryLobs.clear();
         }
         if (temporaryResultLobs != null && temporaryResultLobs.size() > 0) {
-            long keepYoungerThan = System.currentTimeMillis() -
-                    database.getSettings().lobTimeout;
+            long keepYoungerThan = System.nanoTime() -
+                    TimeUnit.MILLISECONDS.toNanos(database.getSettings().lobTimeout);
             while (temporaryResultLobs.size() > 0) {
                 TimeoutValue tv = temporaryResultLobs.getFirst();
                 if (onTimeout && tv.created >= keepYoungerThan) {
                     break;
                 }
                 Value v = temporaryResultLobs.removeFirst().value;
-                if (!v.isLinked()) {
-                    v.close();
+                if (!v.isLinkedToTable()) {
+                    v.remove();
                 }
             }
         }
@@ -587,17 +723,16 @@ public class Session extends SessionWithState {
     }
 
     private void endTransaction() {
-        if (unlinkLobMap != null && unlinkLobMap.size() > 0) {
+        if (removeLobMap != null && removeLobMap.size() > 0) {
             if (database.getMvStore() == null) {
                 // need to flush the transaction log, because we can't unlink
                 // lobs if the commit record is not written
                 database.flush();
             }
-            for (Value v : unlinkLobMap.values()) {
-                v.unlink(database);
-                v.close();
+            for (Value v : removeLobMap.values()) {
+                v.remove();
             }
-            unlinkLobMap = null;
+            removeLobMap = null;
         }
         unlockAll();
     }
@@ -645,12 +780,15 @@ public class Session extends SessionWithState {
             entry.undo(this);
             undoLog.removeLast(trimToSize);
         }
+        //这里的rollback是session级的，
+        //而org.h2.mvstore.db.TransactionStore.rollbackTo(Transaction, long, long)是表级的，在MVTable的addRow和removeRow调用
+        //事务有可能更新了多个表，只要其中之一提前 rollback了，此时就需要rollback其他的
         if (transaction != null) {
             long savepointId = savepoint == null ? 0 : savepoint.transactionSavepoint;
             HashMap<String, MVTable> tableMap =
                     database.getMvStore().getTables();
             Iterator<Change> it = transaction.getChanges(savepointId);
-            while (it.hasNext()) {
+            while (it.hasNext()) { 
                 Change c = it.next();
                 MVTable t = tableMap.get(c.mapName);
                 if (t != null) {
@@ -663,7 +801,7 @@ public class Session extends SessionWithState {
                         row = t.getRow(this, key);
                     } else {
                         op = UndoLogRecord.DELETE;
-                        row = new Row(value.getList(), Row.MEMORY_CALCULATE);
+                        row = createRow(value.getList(), Row.MEMORY_CALCULATE);
                     }
                     row.setKey(key);
                     UndoLogRecord log = new UndoLogRecord(t, op, row);
@@ -709,7 +847,7 @@ public class Session extends SessionWithState {
 
     @Override
     public void cancel() {
-        cancelAt = System.currentTimeMillis();
+        cancelAtNs = System.nanoTime();
     }
 
     @Override
@@ -717,6 +855,10 @@ public class Session extends SessionWithState {
         if (!closed) {
             try {
                 database.checkPowerOff();
+
+                // release any open table locks
+                rollback();
+
                 removeTemporaryLobs(false);
                 cleanTempTables(true);
                 undoLog.clear();
@@ -736,7 +878,7 @@ public class Session extends SessionWithState {
     public void addLock(Table table) {
         if (SysProperties.CHECK) {
             if (locks.contains(table)) {
-                DbException.throwInternalError();
+                DbException.throwInternalError(table.toString());
             }
         }
         locks.add(table);
@@ -759,14 +901,15 @@ public class Session extends SessionWithState {
             // otherwise rollback will try to rollback a not-inserted row
             if (SysProperties.CHECK) {
                 int lockMode = database.getLockMode();
-                if (lockMode != Constants.LOCK_MODE_OFF && !database.isMultiVersion()) {
-                	//当要记撤消日志时，除了TABLE_LINK、EXTERNAL_TABLE_ENGINE这两种类型的表外，其他表类型必须先锁表
-                	//例如调用org.h2.table.Table.lock(Session, boolean, boolean)
-                    String tableType = log.getTable().getTableType();
+                if (lockMode != Constants.LOCK_MODE_OFF &&
+                        !database.isMultiVersion()) {
+                    //当要记撤消日志时，除了TABLE_LINK、EXTERNAL_TABLE_ENGINE这两种类型的表外，其他表类型必须先锁表
+                    //例如调用org.h2.table.Table.lock(Session, boolean, boolean)
+                    TableType tableType = log.getTable().getTableType();
                     if (locks.indexOf(log.getTable()) < 0
-                            && !Table.TABLE_LINK.equals(tableType)
-                            && !Table.EXTERNAL_TABLE_ENGINE.equals(tableType)) {
-                        DbException.throwInternalError();
+                            && TableType.TABLE_LINK != tableType
+                            && TableType.EXTERNAL_TABLE_ENGINE != tableType) {
+                        DbException.throwInternalError("" + tableType);
                     }
                 }
             }
@@ -837,11 +980,13 @@ public class Session extends SessionWithState {
     private void cleanTempTables(boolean closeSession) {
         if (localTempTables != null && localTempTables.size() > 0) {
             synchronized (database) {
-                for (Table table : New.arrayList(localTempTables.values())) {
+                Iterator<Table> it = localTempTables.values().iterator();
+                while (it.hasNext()) {
+                    Table table = it.next();
                     if (closeSession || table.getOnCommitDrop()) {
                         modificationId++;
                         table.setModified();
-                        localTempTables.remove(table.getName());
+                        it.remove();
                         table.removeChildrenAndResources(this);
                         if (closeSession) {
                             // need to commit, otherwise recovery might
@@ -851,6 +996,11 @@ public class Session extends SessionWithState {
                     } else if (table.getOnCommitTruncate()) {
                         table.truncate(this);
                     }
+                }
+                // sometimes Table#removeChildrenAndResources
+                // will take the meta lock
+                if (closeSession) {
+                    database.unlockMeta(this);
                 }
             }
         }
@@ -891,6 +1041,14 @@ public class Session extends SessionWithState {
 
     public Value getLastScopeIdentity() {
         return lastScopeIdentity;
+    }
+
+    public void setLastTriggerIdentity(Value last) {
+        this.lastTriggerIdentity = last;
+    }
+
+    public Value getLastTriggerIdentity() {
+        return lastTriggerIdentity;
     }
 
     /**
@@ -1027,7 +1185,7 @@ public class Session extends SessionWithState {
     }
 
     public void setThrottle(int throttle) {
-        this.throttle = throttle;
+        this.throttleNs = TimeUnit.MILLISECONDS.toNanos(throttle);
     }
 
     /**
@@ -1037,16 +1195,16 @@ public class Session extends SessionWithState {
         if (currentCommandStart == 0) {
             currentCommandStart = System.currentTimeMillis();
         }
-        if (throttle == 0) {
+        if (throttleNs == 0) {
             return;
         }
-        long time = System.currentTimeMillis();
-        if (lastThrottle + Constants.THROTTLE_DELAY > time) {
+        long time = System.nanoTime();
+        if (lastThrottle + TimeUnit.MILLISECONDS.toNanos(Constants.THROTTLE_DELAY) > time) {
             return;
         }
-        lastThrottle = time + throttle;
+        lastThrottle = time + throttleNs;
         try {
-            Thread.sleep(throttle);
+            Thread.sleep(TimeUnit.NANOSECONDS.toMillis(throttleNs));
         } catch (Exception e) {
             // ignore InterruptedException
         }
@@ -1061,9 +1219,9 @@ public class Session extends SessionWithState {
     public void setCurrentCommand(Command command) {
         this.currentCommand = command;
         if (queryTimeout > 0 && command != null) {
-            long now = System.currentTimeMillis();
-            currentCommandStart = now;
-            cancelAt = now + queryTimeout;
+            currentCommandStart = System.currentTimeMillis();
+            long now = System.nanoTime();
+            cancelAtNs = now + TimeUnit.MILLISECONDS.toNanos(queryTimeout);
         }
     }
 
@@ -1075,12 +1233,12 @@ public class Session extends SessionWithState {
      */
     public void checkCanceled() {
         throttle();
-        if (cancelAt == 0) {
+        if (cancelAtNs == 0) {
             return;
         }
-        long time = System.currentTimeMillis();
-        if (time >= cancelAt) {
-            cancelAt = 0;
+        long time = System.nanoTime();
+        if (time >= cancelAtNs) {
+            cancelAtNs = 0;
             throw DbException.get(ErrorCode.STATEMENT_WAS_CANCELED);
         }
     }
@@ -1091,7 +1249,7 @@ public class Session extends SessionWithState {
      * @return the time or 0 if not set
      */
     public long getCancel() {
-        return cancelAt;
+        return cancelAtNs;
     }
 
     public Command getCurrentCommand() {
@@ -1115,8 +1273,15 @@ public class Session extends SessionWithState {
         this.currentSchemaName = schema.getName();
     }
 
+    @Override
     public String getCurrentSchemaName() {
         return currentSchemaName;
+    }
+
+    @Override
+    public void setCurrentSchemaName(String schemaName) {
+        Schema schema = database.getSchema(schemaName);
+        setCurrentSchema(schema);
     }
 
     /**
@@ -1142,29 +1307,28 @@ public class Session extends SessionWithState {
     }
 
     /**
-     * Remember that the given LOB value must be un-linked (disconnected from
-     * the table) at commit.
+     * Remember that the given LOB value must be removed at commit.
      *
      * @param v the value
      */
-    public void unlinkAtCommit(Value v) {
-        if (SysProperties.CHECK && !v.isLinked()) {
-            DbException.throwInternalError();
+    public void removeAtCommit(Value v) {
+        if (SysProperties.CHECK && !v.isLinkedToTable()) {
+            DbException.throwInternalError(v.toString());
         }
-        if (unlinkLobMap == null) {
-            unlinkLobMap = New.hashMap();
+        if (removeLobMap == null) {
+            removeLobMap = New.hashMap();
+            removeLobMap.put(v.toString(), v);
         }
-        unlinkLobMap.put(v.toString(), v);
     }
 
     /**
-     * Do not unlink this LOB value at commit any longer.
+     * Do not remove this LOB value at commit any longer.
      *
      * @param v the value
      */
-    public void unlinkAtCommitStop(Value v) {
-        if (unlinkLobMap != null) {
-            unlinkLobMap.remove(v.toString());
+    public void removeAtCommitStop(Value v) {
+        if (removeLobMap != null) {
+            removeLobMap.remove(v.toString());
         }
     }
 
@@ -1314,13 +1478,38 @@ public class Session extends SessionWithState {
     }
 
     /**
+     * Get the view cache for this session. There are two caches: the subquery
+     * cache (which is only use for a single query, has no bounds, and is
+     * cleared after use), and the cache for regular views.
+     *
+     * @param subQuery true to get the subquery cache
+     * @return the view cache
+     */
+    public Map<Object, ViewIndex> getViewIndexCache(boolean subQuery) {
+        if (subQuery) {
+            // for sub-queries we don't need to use LRU because the cache should
+            // not grow too large for a single query (we drop the whole cache in
+            // the end of prepareLocal)
+            if (subQueryIndexCache == null) {
+                subQueryIndexCache = New.hashMap();
+            }
+            return subQueryIndexCache;
+        }
+        SmallLRUCache<Object, ViewIndex> cache = viewIndexCache;
+        if (cache == null) {
+            viewIndexCache = cache = SmallLRUCache.newInstance(Constants.VIEW_INDEX_CACHE_SIZE);
+        }
+        return cache;
+    }
+
+    /**
      * Remember the result set and close it as soon as the transaction is
      * committed (if it needs to be closed). This is done to delete temporary
      * files as soon as possible, and free object ids of temporary tables.
      *
      * @param result the temporary result set
      */
-    public void addTemporaryResult(LocalResult result) {
+    public void addTemporaryResult(ResultInterface result) {
         if (!result.needToClose()) {
             return;
         }
@@ -1335,7 +1524,7 @@ public class Session extends SessionWithState {
 
     private void closeTemporaryResults() {
         if (temporaryResults != null) {
-            for (LocalResult result : temporaryResults) {
+            for (ResultInterface result : temporaryResults) {
                 result.close();
             }
             temporaryResults = null;
@@ -1351,7 +1540,7 @@ public class Session extends SessionWithState {
         this.queryTimeout = queryTimeout;
         // must reset the cancel at here,
         // otherwise it is still used
-        this.cancelAt = 0;
+        this.cancelAtNs = 0;
     }
 
     public int getQueryTimeout() {
@@ -1493,9 +1682,20 @@ public class Session extends SessionWithState {
         closeTemporaryResults();
     }
 
+    /**
+     * Clear the view cache for this session.
+     */
+    public void clearViewIndexCache() {
+        viewIndexCache = null;
+    }
+
     @Override
     public void addTemporaryLob(Value v) {
-        if (v.getTableId() == LobStorageFrontend.TABLE_RESULT) {
+        if (v.getType() != Value.CLOB && v.getType() != Value.BLOB) {
+            return;
+        }
+        if (v.getTableId() == LobStorageFrontend.TABLE_RESULT ||
+                v.getTableId() == LobStorageFrontend.TABLE_TEMP) {
             if (temporaryResultLobs == null) {
                 temporaryResultLobs = new LinkedList<TimeoutValue>();
             }
@@ -1506,6 +1706,23 @@ public class Session extends SessionWithState {
             }
             temporaryLobs.add(v);
         }
+    }
+
+    @Override
+    public boolean isRemote() {
+        return false;
+    }
+
+    /**
+     * Mark that the given table needs to be analyzed on commit.
+     *
+     * @param table the table
+     */
+    public void markTableForAnalyze(Table table) {
+        if (tablesToAnalyze == null) {
+            tablesToAnalyze = New.hashSet();
+        }
+        tablesToAnalyze.add(table);
     }
 
     /**
@@ -1533,7 +1750,7 @@ public class Session extends SessionWithState {
         /**
          * The time when this object was created.
          */
-        final long created = System.currentTimeMillis();
+        final long created = System.nanoTime();
 
         /**
          * The value.
@@ -1545,5 +1762,4 @@ public class Session extends SessionWithState {
         }
 
     }
-
 }

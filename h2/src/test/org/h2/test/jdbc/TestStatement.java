@@ -6,13 +6,12 @@
 package org.h2.test.jdbc;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.Savepoint;
 import java.sql.Statement;
 import java.util.HashMap;
-import java.util.Properties;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.SysProperties;
@@ -47,6 +46,7 @@ public class TestStatement extends TestBase {
         testSavepoint();
         testConnectionRollback();
         testStatement();
+        testPreparedStatement();
         testIdentityMerge();
         testIdentity();
         conn.close();
@@ -73,11 +73,6 @@ public class TestStatement extends TestBase {
         map.put("x", Object.class);
         assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, conn).
             setTypeMap(map);
-
-        assertThrows(SQLClientInfoException.class, conn).
-            setClientInfo("X", "Y");
-        assertThrows(SQLClientInfoException.class, conn).
-            setClientInfo(new Properties());
     }
 
     private void testTraceError() throws Exception {
@@ -401,6 +396,39 @@ public class TestStatement extends TestBase {
 
         stat.execute("DROP TABLE TEST");
         stat.execute("DROP TABLE TEST2");
+    }
+
+    private void testPreparedStatement() throws SQLException{
+        Statement stat = conn.createStatement();
+        stat.execute("create table test(id int primary key, name varchar(255))");
+        stat.execute("insert into test values(1, 'Hello')");
+        stat.execute("insert into test values(2, 'World')");
+        PreparedStatement ps = conn.prepareStatement(
+                "select name from test where id in (select id from test where name REGEXP ?)");
+        ps.setString(1, "Hello");
+        ResultSet rs = ps.executeQuery();
+        assertTrue(rs.next());
+        assertEquals("Hello", rs.getString("name"));
+        assertFalse(rs.next());
+        ps.setString(1, "World");
+        rs = ps.executeQuery();
+        assertTrue(rs.next());
+        assertEquals("World", rs.getString("name"));
+        assertFalse(rs.next());
+        //Changes the table structure
+        stat.execute("create index t_id on test(name)");
+        //Test the prepared statement again to check if the internal cache attributes were reset
+        ps.setString(1, "Hello");
+        rs = ps.executeQuery();
+        assertTrue(rs.next());
+        assertEquals("Hello", rs.getString("name"));
+        assertFalse(rs.next());
+        ps.setString(1, "World");
+        rs = ps.executeQuery();
+        assertTrue(rs.next());
+        assertEquals("World", rs.getString("name"));
+        assertFalse(rs.next());
+        stat.execute("drop table test");
     }
 
 }

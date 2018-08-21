@@ -7,7 +7,6 @@ package org.h2.command;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
-
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
 import org.h2.engine.Database;
@@ -22,7 +21,6 @@ import org.h2.util.MathUtils;
  * Represents a SQL statement. This object is only used on the server side.
  */
 public abstract class Command implements CommandInterface {
-
     /**
      * The session.
      */
@@ -31,7 +29,7 @@ public abstract class Command implements CommandInterface {
     /**
      * The last start time.
      */
-    protected long startTime;
+    protected long startTimeNanos;
 
     /**
      * The trace module.
@@ -68,6 +66,11 @@ public abstract class Command implements CommandInterface {
      */
     @Override
     public abstract boolean isQuery();
+
+    /**
+     * Prepare join batching.
+     */
+    public abstract void prepareJoinBatch();
 
     /**
      * Get the list of parameters.
@@ -108,8 +111,8 @@ public abstract class Command implements CommandInterface {
      * @param maxrows the maximum number of rows returned
      * @return the local result set
      * @throws DbException if the command is not a query
-     */
-    public ResultInterface query(int maxrows) { //子类要实现这个方法
+     */ 
+    public ResultInterface query(int maxrows) { //子类要实现这个方法 
         throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
     }
 
@@ -122,8 +125,8 @@ public abstract class Command implements CommandInterface {
      * Start the stopwatch.
      */
     void start() {
-        if (trace.isInfoEnabled()) {
-            startTime = System.currentTimeMillis();
+        if (trace.isInfoEnabled() || session.getDatabase().getQueryStatistics()) {
+            startTimeNanos = System.nanoTime();
         }
     }
 
@@ -143,7 +146,8 @@ public abstract class Command implements CommandInterface {
         }
     }
 
-    private void stop() {
+    @Override
+    public void stop() {
         session.endStatement();
         session.setCurrentCommand(null);
         //DDL的isTransactional默认都是false，相当于每执行完一条DDL都默认提交事务
@@ -159,11 +163,14 @@ public abstract class Command implements CommandInterface {
                 }
             }
         }
-        if (trace.isInfoEnabled() && startTime > 0) {
-            long time = System.currentTimeMillis() - startTime;
-            if (time > Constants.SLOW_QUERY_LIMIT_MS) { //如果一条sql的执行时间大于100毫秒，记下它
-                //trace.info("slow query: {0} ms", time);
-            	trace.info("slow query: {0} ms, sql: {1}", time, sql); //我加上的
+        //早期的版本就的是System.currentTimeMillis()，
+        //现在改成System.nanoTime()了，性能会好一点
+        if (trace.isInfoEnabled() && startTimeNanos > 0) {
+            long timeMillis = (System.nanoTime() - startTimeNanos) / 1000 / 1000;
+            //如果一条sql的执行时间大于100毫秒，记下它
+            if (timeMillis > Constants.SLOW_QUERY_LIMIT_MS) {
+                //trace.info("slow query: {0} ms", timeMillis);
+                trace.info("slow query: {0} ms, sql: {1}", timeMillis, sql); //我加上的 
             }
         }
     }
@@ -178,7 +185,7 @@ public abstract class Command implements CommandInterface {
      */
     @Override
     public ResultInterface executeQuery(int maxrows, boolean scrollable) {
-        startTime = 0;
+        startTimeNanos = 0;
         long start = 0;
         Database database = session.getDatabase();
         //也跟executeUpdate()的情型一样，就算是查询也不例外
@@ -197,7 +204,9 @@ public abstract class Command implements CommandInterface {
                 while (true) {
                     database.checkPowerOff();
                     try {
-                        return query(maxrows);
+                        ResultInterface result = query(maxrows);
+                        callStop = !result.isLazy();
+                        return result;
                     } catch (DbException e) {
                         start = filterConcurrentUpdate(e, start);
                     } catch (OutOfMemoryError e) {
@@ -259,7 +268,7 @@ public abstract class Command implements CommandInterface {
                     try {
                         return update();
                     } catch (DbException e) {
-                        start = filterConcurrentUpdate(e, start);
+                        start = filterConcurrentUpdate(e, start); //如果是并发更新异常，会进行重试，直到超时为止
                     } catch (OutOfMemoryError e) {
                         callStop = false;
                         database.shutdownImmediately();
@@ -299,7 +308,10 @@ public abstract class Command implements CommandInterface {
     }
 
     private long filterConcurrentUpdate(DbException e, long start) {
-        if (e.getErrorCode() != ErrorCode.CONCURRENT_UPDATE_1) {
+        int errorCode = e.getErrorCode();
+        if (errorCode != ErrorCode.CONCURRENT_UPDATE_1 &&
+                errorCode != ErrorCode.ROW_NOT_FOUND_IN_PRIMARY_INDEX &&
+                errorCode != ErrorCode.ROW_NOT_FOUND_WHEN_DELETING_1) {
             throw e;
         }
         long now = System.nanoTime() / 1000000;
